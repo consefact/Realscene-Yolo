@@ -13,7 +13,7 @@ REAL_SYNTHETIC_DIR = "real_synthetic_targets"  # 真实合成靶标目录
 ORIGINAL_TARGET_DIR = "original_targets"  # 原始识别区域目录
 OUTPUT_DIR = "NTDATA"
 
-BASE_SIZE = (640, 480)  # YOLO训练尺寸
+BASE_SIZE = (1280, 1280)  # YOLO训练尺寸
 NUM_TARGETS_PER_IMAGE = 3  # 每张图像目标数量
 MIN_CROP_RATIO = 0.3  # 最小裁剪比例
 MIN_TARGET_RATIO = 0.2  # 目标最小占比
