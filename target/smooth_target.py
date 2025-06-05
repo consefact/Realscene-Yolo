@@ -75,8 +75,8 @@ def process_all_images(original_root, new_root, real_targets_dir=None, probabili
                 original_img.close()
 
 if __name__ == "__main__":
-    original_dataset_dir = "/home/airhust/zyt/images/pictures/pictures"  # 原始数据集根目录
-    new_dataset_dir = "/home/airhust/zyt/images/realscene_targets"  # 新生成数据集根目录
+    original_dataset_dir = "/home/airhust/zyt/images/organized_pics"  # 原始数据集根目录
+    new_dataset_dir = "/home/airhust/zyt/images/new_targets"  # 新生成数据集根目录
     real_targets_dir = "/home/airhust/zyt/images/pictures/background"          # 真实靶标图片目录
     probability_use_real = 1                 # 每次处理时使用真实靶标的概率（此处设为1）
 

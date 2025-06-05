@@ -8,9 +8,9 @@ from tqdm import tqdm
 # 全局参数配置
 REAL_IMAGES_DIR = "/home/airhust/zyt/images/pictures/floor"
 SYNTHETIC_DIR = "none"  # 合成靶标目录
-REAL_SYNTHETIC_DIR = "/home/airhust/zyt/images/realscene_targets"  # 真实合成靶标目录
+REAL_SYNTHETIC_DIR = "/home/airhust/zyt/images/new_targets"  # 真实合成靶标目录
 ORIGINAL_TARGET_DIR = "no"  # 原始识别区域目录
-OUTPUT_DIR = "/home/airhust/zyt/images/test"
+OUTPUT_DIR = "/home/airhust/zyt/images/FORTEST"
 EPOCHS = 1  # 总轮数
 BASE_SIZE = (1280, 1280)  # YOLO训练尺寸
 NUM_TARGETS_PER_IMAGE = 10  # 每张图像目标数量
@@ -21,9 +21,10 @@ MAX_TARGET_RATIO = 0.6  # 目标最大占比
 MAX_TARGET_FAILURE = 5  # 最大失败次数
 MAX_OVERLAP_ATTEMPTS = 20  # 最大重叠检测次数
 TO_BORDER = 1e-6  # 边界安全距离
-NUM_ROUNDS = 10  # 总生成轮数
+NUM_ROUNDS = 3000  # 总生成轮数
 
 APPLY_GEOMETRIC_AUG = False
+APPLY_INK_REFLECTION = False  # 是否应用油墨反光效果
 # 靶标类型定义
 TARGET_TYPES = {
     "synthetic": 100,      # 合成靶标
@@ -114,6 +115,11 @@ def apply_base_augmentation(base_image):
         img_hsv = np.clip(img_hsv + hsv_factor, 0, 1).astype(np.float32)
         base = Image.fromarray((cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8))
     
+    # Cutout增强
+    if random.random() > 0.5:
+        img_np = np.array(base)
+        img_np = apply_cutout(img_np)
+        base = Image.fromarray(img_np)
     return base
 
 def random_crop(image_path):
@@ -411,20 +417,67 @@ def apply_final_noise(img_np):
         out[tuple(coords)] = 255
         
         img_np = out
-        
+
+    # 泊松噪声
+    if random.random() < 0.3:  # 30% 的概率添加泊松噪声
+        intensity_scale = 0.1  # 控制噪声强度，建议 0.1~0.3
+        # 将图像转换为浮点型以支持泊松分布
+        img_float = img_np.astype(np.float32)
+        # 生成泊松噪声，lambda = 像素值 * 强度系数
+        noise = np.random.poisson(lam=img_float * intensity_scale)
+        # 将噪声叠加到原始图像
+        img_np = np.clip(img_float + noise, 0, 255).astype(np.uint8)  
+
+    # 油墨反光
+    if random.random() < 0.3:
+        img_np = apply_ink_reflection(img_np)  
     return img_np
+
+def apply_ink_reflection(img_np):
+    """模拟油墨反光效果"""
+    if not APPLY_INK_REFLECTION:
+        return img_np
+    h, w = img_np.shape[:2]
+    # 创建一个空白的遮罩图层
+    reflection_mask = np.zeros((h, w), dtype=np.float32)
+        
+    # 随机生成反光区域（椭圆形）
+    center_x = random.randint(int(w * 0.2), int(w * 0.8))
+    center_y = random.randint(int(h * 0.2), int(h * 0.8))
+    radius_x = random.randint(10, 40)
+    radius_y = random.randint(10, 40)
+    angle = random.randint(0, 360)
+
+    # 使用椭圆绘制反光区域
+    cv2.ellipse(reflection_mask, (center_x, center_y), (radius_x, radius_y), angle, 0, 360, 1.0, -1)
+
+    # 对遮罩进行高斯模糊，模拟扩散效果
+    reflection_mask = cv2.GaussianBlur(reflection_mask, (21, 21), 0)
+
+    # 增强亮度（模拟反光）
+    brightness_factor = random.uniform(0.5, 1.5)
+    reflection_mask = np.clip(reflection_mask * brightness_factor, 0, 1)
+
+    # 将反光叠加到图像上（使用“亮光”混合模式）
+    img_float = img_np.astype(np.float32) / 255.0
+    img_float = np.clip(img_float + reflection_mask[..., None], 0, 1)
+    img_np = (img_float * 255).astype(np.uint8)
+
+    return img_np
+
+
 
 def apply_cutout(img_np):
     """Cutout增强"""
-    if random.random() < 0.5:
-        mask_size = random.randint(20, 100)
-        num_masks = random.randint(1, 5)
-        h, w = img_np.shape[:2]
+    mask_size = random.randint(50, 100)
+    num_masks = random.randint(1, 5)
+    h, w = img_np.shape[:2]
         
-        for _ in range(num_masks):
-            x = random.randint(0, w - mask_size)
-            y = random.randint(0, h - mask_size)
-            img_np[y:y+mask_size, x:x+mask_size] = np.random.randint(0, 256, (mask_size, mask_size, 3))
+    for _ in range(num_masks):
+        x = random.randint(0, w - mask_size)
+        y = random.randint(0, h - mask_size)
+        img_np[y:y+mask_size, x:x+mask_size] = np.random.randint(0, 256, (mask_size, mask_size, 3))
+
             
     return img_np
 
