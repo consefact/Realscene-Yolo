@@ -1,9 +1,6 @@
 import os
-import random
 from PIL import Image, ImageDraw, ImageFont
-import colorsys
-
-
+import colorsys  
 CLASSES = [
     'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
     'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
@@ -20,47 +17,44 @@ CLASSES = [
     'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle',
     'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
 ]
-def get_valid_files(input_dir):
-    """获取所有有效图片文件（有对应txt标注）"""
-    valid_files = []
-    for filename in os.listdir(input_dir):
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            continue
-        base_name = os.path.splitext(filename)[0]
-        txt_path = os.path.join(input_dir, f"{base_name}.txt")
-        if os.path.exists(txt_path):
-            valid_files.append(filename)
-    return valid_files
-
-def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
-    """绘制标注框并保存"""
+def draw_yolo_boxes(input_dir, output_dir):
+    # 创建输出目录
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
-    # 生成100种颜色
+
+    # 生成100种不同颜色（基于HSV色轮）
     num_classes = 100
     colors = []
     for i in range(num_classes):
+        # 计算HSV色调值（0-360度）
         hue = i * (360 / num_classes)
+        # 转换为RGB颜色（饱和度1.0，亮度1.0）
         r, g, b = colorsys.hsv_to_rgb(hue/360, 1.0, 1.0)
-        colors.append((int(r*255), int(g*255), int(b*255)))
-    
-    # 尝试加载大字体
+        # 转换为RGB整数格式（0-255）
+        color = (int(r * 255), int(g * 255), int(b * 255))
+        colors.append(color)
+
+    # 尝试加载较大字体
     try:
-        font = ImageFont.truetype("arial.ttf", 24)
+        font = ImageFont.truetype("arial.ttf", 24)  # 尝试加载Arial字体
     except:
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)  # Linux系统常见字体
         except:
-            font = ImageFont.load_default()
+            font = ImageFont.load_default()  # 使用默认字体（可能较小）
             print("Warning: Large font not found. Using default font.")
+    for filename in os.listdir(input_dir):
+        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            continue
 
-    # 处理选中的文件
-    for filename in files_to_draw:
         base_name = os.path.splitext(filename)[0]
         txt_path = os.path.join(input_dir, f"{base_name}.txt")
         img_path = os.path.join(input_dir, filename)
-        
+
+        if not os.path.exists(txt_path):
+            print(f"Warning: No annotation for {filename}")
+            continue
+
         with Image.open(img_path) as img:
             draw = ImageDraw.Draw(img)
             img_width, img_height = img.size
@@ -89,8 +83,10 @@ def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
                     x_max = x_center_px + half_width
                     y_max = y_center_px + half_height
 
-                    # 绘制矩形框
+                    # 获取对应颜色
                     color = colors[class_id]
+
+                    # 绘制矩形框
                     draw.rectangle(
                         [(x_min, y_min), (x_max, y_max)],
                         outline=color,
@@ -102,7 +98,6 @@ def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
                     bbox = font.getbbox(text)
                     text_width = bbox[2] - bbox[0]
                     text_height = bbox[3] - bbox[1]
-                    #text_width, text_height = font.getsize(text)
                     text_x = x_min
                     text_y = y_min - text_height
 
@@ -112,8 +107,8 @@ def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
                     draw.text(
                         (text_x, text_y),
                         text,
-                        fill='white',
-                        font=font
+                        fill=color,  # 白色文字更易读
+                        font=font,
                     )
 
             # 保存处理后的图像
@@ -122,18 +117,6 @@ def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
             print(f"Saved: {output_path}")
 
 if __name__ == "__main__":
-    input_directory = "/home/airhust/zyt/images/test"
-    output_directory = "/home/airhust/zyt/images/toutput_samples"
-    num_samples = 10  # 修改此值调整抽样数量
-
-    # 获取所有有效文件
-    valid_files = get_valid_files(input_directory)
-    if not valid_files:
-        print("No valid files found in the input directory!")
-        exit()
-
-    # 随机选取样本
-    selected_files = random.sample(valid_files, k=num_samples)
-
-    # 执行可视化
-    draw_bounding_boxes(input_directory, output_directory, selected_files)
+    input_directory = "/home/airhust/zyt/images/test"  # 输入目录
+    output_directory = "/home/airhust/zyt/images/checked_images"  # 输出目录
+    draw_yolo_boxes(input_directory, output_directory)

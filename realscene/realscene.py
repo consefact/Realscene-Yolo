@@ -3,27 +3,26 @@ import random
 from PIL import Image, ImageEnhance
 import numpy as np
 import cv2
-from config import CLASSES
 from tqdm import tqdm
 
 # 全局参数配置
-REAL_IMAGES_DIR = "real_images"
-SYNTHETIC_DIR = "new_cifar100_images"  # 合成靶标目录
-REAL_SYNTHETIC_DIR = "real_synthetic_targets"  # 真实合成靶标目录
-ORIGINAL_TARGET_DIR = "original_targets"  # 原始识别区域目录
-OUTPUT_DIR = "NTDATA"
-
+REAL_IMAGES_DIR = "/home/airhust/zyt/images/pictures/floor"
+SYNTHETIC_DIR = "none"  # 合成靶标目录
+REAL_SYNTHETIC_DIR = "/home/airhust/zyt/images/realscene_targets"  # 真实合成靶标目录
+ORIGINAL_TARGET_DIR = "no"  # 原始识别区域目录
+OUTPUT_DIR = "/home/airhust/zyt/images/test"
+EPOCHS = 1  # 总轮数
 BASE_SIZE = (1280, 1280)  # YOLO训练尺寸
-NUM_TARGETS_PER_IMAGE = 3  # 每张图像目标数量
+NUM_TARGETS_PER_IMAGE = 10  # 每张图像目标数量
 MIN_CROP_RATIO = 0.3  # 最小裁剪比例
 MIN_TARGET_RATIO = 0.2  # 目标最小占比
 MAX_CROP_RATIO = 0.9  # 最大裁剪比例
-MAX_TARGET_RATIO = 0.9  # 目标最大占比
-MAX_TARGET_FAILURE = 3  # 最大失败次数
+MAX_TARGET_RATIO = 0.6  # 目标最大占比
+MAX_TARGET_FAILURE = 5  # 最大失败次数
 MAX_OVERLAP_ATTEMPTS = 20  # 最大重叠检测次数
 TO_BORDER = 1e-6  # 边界安全距离
-NUM_ROUNDS = 6000  # 总生成轮数
-class_names = CLASSES  # 从config.py导入类别名称
+NUM_ROUNDS = 10  # 总生成轮数
+
 APPLY_GEOMETRIC_AUG = False
 # 靶标类型定义
 TARGET_TYPES = {
@@ -32,6 +31,23 @@ TARGET_TYPES = {
     "original": 32         # 原始识别区域
 }
 
+CLASSES = [
+    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
+    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
+    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock',
+    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur',
+    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
+    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
+    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
+    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
+    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum',
+    'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark',
+    'shrew', 'skunk', 'skyscraper', 'snail', 'snake', 'spider', 'squirrel',
+    'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone',
+    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle',
+    'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
+]
+class_names = CLASSES  # 从config.py导入类别名称
 def apply_geometric_augmentation(base):
     """几何变换增强"""
     if not APPLY_GEOMETRIC_AUG:
@@ -92,10 +108,10 @@ def apply_base_augmentation(base_image):
     
     # HSV颜色扰动
     if random.random() > 0.5:
-        img_np = np.array(base).astype("float32") / 255.0
+        img_np = np.array(base).astype(np.float32) / 255.0
         img_hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
         hsv_factor = np.random.uniform(-0.1, 0.1, 3)
-        img_hsv = np.clip(img_hsv + hsv_factor, 0, 1)
+        img_hsv = np.clip(img_hsv + hsv_factor, 0, 1).astype(np.float32)
         base = Image.fromarray((cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8))
     
     return base
@@ -176,42 +192,34 @@ def apply_augmentation(target_tuple):
     return (target, class_id, original_idx, target_type)
 
 def place_target(base, target_tuple, placed_bboxes):
-    """放置靶标并确保不重叠"""
-    target, class_id, original_idx, target_type = target_tuple
     base = base.convert("RGBA")
-    target = target.convert("RGBA")
+    target, class_id, original_idx, target_type = target_tuple
     base_width, base_height = base.size
     target_width, target_height = target.size
-    
-    # 根据类型确定有效区域
-    effective_w, effective_h = {
-        "original": (target_width, target_height),
-        "synthetic": (32, 32),
-        "real_synthetic": (32, 32)
-    }[target_type]
-    
-    for _ in range(MAX_OVERLAP_ATTEMPTS):
+
+    placed = False
+    for _ in range(MAX_OVERLAP_ATTEMPTS * 2):
+        # 使用随机生成策略确保坐标在图像内
         x = random.randint(0, base_width - target_width)
         y = random.randint(0, base_height - target_height)
-        new_bbox = {"x": x, "y": y, "width": effective_w, "height": effective_h}
-        
+        new_bbox = {"x": x, "y": y, "width": target_width, "height": target_height}
+
         # 检查重叠
         overlap = False
+        safe_margin = max(target_width, target_height) * 0.1
         for bbox in placed_bboxes:
-            bx1, by1 = bbox['x'], bbox['y']
-            bx2, by2 = bx1 + bbox['width'], by1 + bbox['height']
-            tx1, ty1 = new_bbox['x'], new_bbox['y']
-            tx2, ty2 = tx1 + new_bbox['width'], ty1 + new_bbox['height']
-            
-            if not (tx2 < bx1 or tx1 > bx2 or ty2 < by1 or ty1 > by2):
+            dx = max(0, abs((x + target_width / 2) - (bbox['x'] + bbox['width'] / 2)) - (target_width + bbox['width']) / 2)
+            dy = max(0, abs((y + target_height / 2) - (bbox['y'] + bbox['height'] / 2)) - (target_height + bbox['height']) / 2)
+            if dx < safe_margin and dy < safe_margin:
                 overlap = True
                 break
-                
         if not overlap:
+            placed = True
             break
-    else:
+
+    if not placed:
         return base, None
-        
+
     base.paste(target, (x, y), target.getchannel('A'))
     return (
         base.convert("RGB"),
@@ -219,8 +227,9 @@ def place_target(base, target_tuple, placed_bboxes):
             "original_idx": original_idx,
             "x": x,
             "y": y,
-            "width": effective_w,
-            "height": effective_h
+            "width": target_width,
+            "height": target_height,
+            "target_type": target_type
         }
     )
 
@@ -245,7 +254,11 @@ def process_round(round_num, target_images, used_targets):
     placed_bboxes = []
     failed_attempts = 0
     
-    # 保持原有目标放置逻辑
+    # 创建空间分区
+    grid_size = max(2, min(5, int(NUM_TARGETS_PER_IMAGE**0.5)))
+    available_cells = [(i, j) for i in range(grid_size) for j in range(grid_size)]
+    random.shuffle(available_cells)
+    
     for _ in range(NUM_TARGETS_PER_IMAGE):
         available_targets = [
             t for t in target_images if not used_targets[t[2]]
@@ -283,7 +296,6 @@ def process_round(round_num, target_images, used_targets):
         new_height = int(current_height * scale)
         target = target.resize((new_width, new_height), Image.LANCZOS)
         
-        # 尝试放置目标（保持原有逻辑）
         placed_base, pixel_bbox = place_target(
             base.copy(),
             (target, *augmented[1:]),
@@ -291,36 +303,43 @@ def process_round(round_num, target_images, used_targets):
         )
         
         if pixel_bbox:
-            placed_bboxes.append(pixel_bbox)
+            # 添加实际靶标尺寸到已放置列表
+            placed_bboxes.append({
+                "x": pixel_bbox['x'],
+                "y": pixel_bbox['y'],
+                "width": pixel_bbox['width'],
+                "height": pixel_bbox['height']
+            })
+            
             base = placed_base
-
-            # 新增：根据 target_type 调整标注框位置和尺寸（保持不变）
-            target_x = pixel_bbox['x']
-            target_y = pixel_bbox['y']
+            target_type = pixel_bbox['target_type']
             target_width = pixel_bbox['width']
             target_height = pixel_bbox['height']
 
+            # 修正标注框计算
             if target_type in ["synthetic", "real_synthetic"]:
-                roi_x = 34
-                roi_y = 34
-                roi_w = 32
-                roi_h = 32
+                # 使用相对位置计算ROI
+                roi_x = 34 * target_width / 100.0
+                roi_y = 34 * target_height / 100.0
+                roi_w = 32 * target_width / 100.0
+                roi_h = 32 * target_height / 100.0
 
-                abs_x = target_x + roi_x * (target_width / 100)
-                abs_y = target_y + roi_y * (target_height / 100)
-                abs_w = roi_w * (target_width / 100)
-                abs_h = roi_h * (target_height / 100)
-
-                x_center = (abs_x + abs_w / 2) / BASE_SIZE[0]
-                y_center = (abs_y + abs_h / 2) / BASE_SIZE[1]
-                width_norm = abs_w / BASE_SIZE[0]
-                height_norm = abs_h / BASE_SIZE[1]
+                abs_x = pixel_bbox['x'] + roi_x
+                abs_y = pixel_bbox['y'] + roi_y
+                abs_w = roi_w
+                abs_h = roi_h
 
             elif target_type == "original":
-                x_center = (pixel_bbox['x'] + pixel_bbox['width'] / 2) / BASE_SIZE[0]
-                y_center = (pixel_bbox['y'] + pixel_bbox['height'] / 2) / BASE_SIZE[1]
-                width_norm = pixel_bbox['width'] / BASE_SIZE[0]
-                height_norm = pixel_bbox['height'] / BASE_SIZE[1]
+                abs_x = pixel_bbox['x']
+                abs_y = pixel_bbox['y']
+                abs_w = target_width
+                abs_h = target_height
+
+            # 计算归一化坐标
+            x_center = (abs_x + abs_w / 2) / BASE_SIZE[0]
+            y_center = (abs_y + abs_h / 2) / BASE_SIZE[1]
+            width_norm = abs_w / BASE_SIZE[0]
+            height_norm = abs_h / BASE_SIZE[1]
 
             # 边界修正
             x_min = max(0.0 + TO_BORDER, x_center - width_norm / 2)
@@ -397,9 +416,9 @@ def apply_final_noise(img_np):
 
 def apply_cutout(img_np):
     """Cutout增强"""
-    if random.random() < 0.3:
-        mask_size = random.randint(20, 60)
-        num_masks = random.randint(1, 3)
+    if random.random() < 0.5:
+        mask_size = random.randint(20, 100)
+        num_masks = random.randint(1, 5)
         h, w = img_np.shape[:2]
         
         for _ in range(num_masks):
@@ -449,5 +468,5 @@ def main(epochs=10):
     print("所有轮次完成！")
 
 if __name__ == "__main__":
-    main(6)
+    main(EPOCHS)
     print(f"生成的标签文件数量：{count_txt_files_recursive(OUTPUT_DIR)}")
