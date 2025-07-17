@@ -23,9 +23,9 @@ def copy_images_and_labels(src_dir, img_dst, label_dst):
 
 def main():
     parser = argparse.ArgumentParser(description='将训练集和验证集整理为 YOLO 数据集结构')
-    parser.add_argument('train_source', help='训练集源目录（包含图片和标签）',default='/home/airhust/zyt/images/FORTRAIN',)
-    parser.add_argument('val_source', help='验证集源目录（包含图片和标签）',default='/home/airhust/zyt/images/FORTEST')
-    parser.add_argument('target_dir', help='输出 YOLO 数据集的根目录',default='/home/airhust/zyt/images/yolo_dataset')
+    parser.add_argument('train_source', help='训练集源目录（包含图片和标签）',default='/home/airhust/zyt/images/sec_train',)
+    parser.add_argument('val_source', help='验证集源目录（包含图片和标签）',default='/home/airhust/zyt/images/FORTRAIN')
+    parser.add_argument('target_dir', help='输出 YOLO 数据集的根目录',default='/home/airhust/zyt/images/sec_dataset')
     args = parser.parse_args()
 
     # 构建目标目录结构

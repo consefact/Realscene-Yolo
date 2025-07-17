@@ -1,7 +1,6 @@
-path: /home/airhust/zyt/new_set
+path: /home/airhust/zyt/images/sec_dataset
 train: train/images                
 val: val/images
-test: test/images
 
 nc: 100
 names:
