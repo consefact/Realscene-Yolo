@@ -117,6 +117,6 @@ def draw_yolo_boxes(input_dir, output_dir):
             print(f"Saved: {output_path}")
 
 if __name__ == "__main__":
-    input_directory = "/home/airhust/zyt/images/test"  # 输入目录
-    output_directory = "/home/airhust/zyt/images/checked_images"  # 输出目录
+    input_directory = "/home/ling/zyt195/images/FORTEST"  # 输入目录
+    output_directory = "/home/ling/zyt195/images/checked_images"  # 输出目录
     draw_yolo_boxes(input_directory, output_directory)

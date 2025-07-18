@@ -1,17 +1,20 @@
-import os
+import multiprocessing
 import random
-from PIL import Image, ImageEnhance
+import os
 import numpy as np
-import cv2
 from tqdm import tqdm
+import time
+from PIL import Image, ImageEnhance
+import cv2
+import ctypes
 
 # 全局参数配置
 REAL_IMAGES_DIR = "/home/ling/zyt195/images/floor"
 SYNTHETIC_DIR = "none"  # 合成靶标目录
 REAL_SYNTHETIC_DIR = "/home/ling/zyt195/images/targets"  # 真实合成靶标目录
 ORIGINAL_TARGET_DIR = "no"  # 原始识别区域目录
-OUTPUT_DIR = "/home/ling/zyt195/images/TEST"
-EPOCHS = 4  # 总轮数
+OUTPUT_DIR = "/home/ling/zyt195/images/ANOTRAIN"
+EPOCHS = 8  # 总轮数
 BASE_SIZE = (1280, 1280)  # YOLO训练尺寸
 NUM_TARGETS_PER_IMAGE = 8  # 每张图像目标数量
 MIN_CROP_RATIO = 0.4  # 最小裁剪比例
@@ -21,7 +24,7 @@ MAX_TARGET_RATIO = 0.6  # 目标最大占比
 MAX_TARGET_FAILURE = 8  # 最大失败次数
 MAX_OVERLAP_ATTEMPTS = 20  # 最大重叠检测次数
 TO_BORDER = 1e-6  # 边界安全距离
-NUM_ROUNDS = 6000  # 总生成轮数
+NUM_ROUNDS = 3000  # 总生成轮数
 
 APPLY_GEOMETRIC_AUG = False
 APPLY_INK_REFLECTION = False  # 是否应用油墨反光效果
@@ -49,6 +52,7 @@ CLASSES = [
     'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
 ]
 class_names = CLASSES  # 从config.py导入类别名称
+
 def apply_geometric_augmentation(base):
     """几何变换增强"""
     if not APPLY_GEOMETRIC_AUG:
@@ -197,199 +201,14 @@ def apply_augmentation(target_tuple):
     
     return (target, class_id, original_idx, target_type)
 
-def place_target(base, target_tuple, placed_bboxes):
-    base = base.convert("RGBA")
-    target, class_id, original_idx, target_type = target_tuple
-    base_width, base_height = base.size
-    target_width, target_height = target.size
-
-    placed = False
-    for _ in range(MAX_OVERLAP_ATTEMPTS * 2):
-        # 使用随机生成策略确保坐标在图像内
-        x = random.randint(0, base_width - target_width)
-        y = random.randint(0, base_height - target_height)
-        new_bbox = {"x": x, "y": y, "width": target_width, "height": target_height}
-
-        # 检查重叠
-        overlap = False
-        safe_margin = max(target_width, target_height) * 0.1
-        for bbox in placed_bboxes:
-            dx = max(0, abs((x + target_width / 2) - (bbox['x'] + bbox['width'] / 2)) - (target_width + bbox['width']) / 2)
-            dy = max(0, abs((y + target_height / 2) - (bbox['y'] + bbox['height'] / 2)) - (target_height + bbox['height']) / 2)
-            if dx < safe_margin and dy < safe_margin:
-                overlap = True
-                break
-        if not overlap:
-            placed = True
-            break
-
-    if not placed:
-        return base, None
-
-    base.paste(target, (x, y), target.getchannel('A'))
-    return (
-        base.convert("RGB"),
-        {
-            "original_idx": original_idx,
-            "x": x,
-            "y": y,
-            "width": target_width,
-            "height": target_height,
-            "target_type": target_type
-        }
-    )
-
-def process_round(round_num, target_images, used_targets):
-    """处理单轮生成"""
-    # 提前检查是否所有目标都已使用
-    if all(used_targets):
-        return
-    
-    # 随机选择1-50中的基底图片
-    real_image_idx = random.choice(range(1, 104))
-    
-    real_path = os.path.join(REAL_IMAGES_DIR, f"{real_image_idx}.jpg")
-    output_image_path = os.path.join(
-        OUTPUT_DIR, 
-        f"E{epoch}_R{round_num}_img{real_image_idx}.jpg"
-    )
-    label_path = output_image_path.replace(".jpg", ".txt")
-    
-    base = random_crop(real_path)
-    bboxes = []
-    placed_bboxes = []
-    failed_attempts = 0
-    
-    # 创建空间分区
-    grid_size = max(2, min(5, int(NUM_TARGETS_PER_IMAGE**0.5)))
-    available_cells = [(i, j) for i in range(grid_size) for j in range(grid_size)]
-    random.shuffle(available_cells)
-    
-    for _ in range(NUM_TARGETS_PER_IMAGE):
-        available_targets = [
-            t for t in target_images if not used_targets[t[2]]
-        ]
-        if not available_targets:
-            break
-            
-        target_tuple = random.choice(available_targets)
-        augmented = apply_augmentation(target_tuple)
-        target, _, _, target_type = augmented
-        
-        # 动态计算缩放比例（保持原有逻辑）
-        current_width, current_height = target.size
-        min_dim = min(current_width, current_height)
-        max_allowed_width = BASE_SIZE[0]
-        max_allowed_height = BASE_SIZE[1]
-        
-        width_scale = max_allowed_width / current_width
-        height_scale = max_allowed_height / current_height
-        max_safe_scale = min(width_scale, height_scale)
-        
-        # 缩放逻辑（保持不变）
-        if target_type == "original":
-            min_scale = 1.0
-            max_scale = min(3.0, max_safe_scale)
-        else:
-            min_scale = (MIN_TARGET_RATIO * min(BASE_SIZE)) / min_dim
-            max_scale = min(
-                (MAX_TARGET_RATIO * min(BASE_SIZE)) / min_dim,
-                max_safe_scale
-        )
-        
-        scale = random.uniform(min_scale, max_scale)
-        new_width = int(current_width * scale)
-        new_height = int(current_height * scale)
-        target = target.resize((new_width, new_height), Image.LANCZOS)
-        
-        placed_base, pixel_bbox = place_target(
-            base.copy(),
-            (target, *augmented[1:]),
-            placed_bboxes
-        )
-        
-        if pixel_bbox:
-            # 添加实际靶标尺寸到已放置列表
-            placed_bboxes.append({
-                "x": pixel_bbox['x'],
-                "y": pixel_bbox['y'],
-                "width": pixel_bbox['width'],
-                "height": pixel_bbox['height']
-            })
-            
-            base = placed_base
-            target_type = pixel_bbox['target_type']
-            target_width = pixel_bbox['width']
-            target_height = pixel_bbox['height']
-
-            # 修正标注框计算
-            if target_type in ["synthetic", "real_synthetic"]:
-                # 使用相对位置计算ROI
-                roi_x = 34 * target_width / 100.0
-                roi_y = 34 * target_height / 100.0
-                roi_w = 32 * target_width / 100.0
-                roi_h = 32 * target_height / 100.0
-
-                abs_x = pixel_bbox['x'] + roi_x
-                abs_y = pixel_bbox['y'] + roi_y
-                abs_w = roi_w
-                abs_h = roi_h
-
-            elif target_type == "original":
-                abs_x = pixel_bbox['x']
-                abs_y = pixel_bbox['y']
-                abs_w = target_width
-                abs_h = target_height
-
-            # 计算归一化坐标
-            x_center = (abs_x + abs_w / 2) / BASE_SIZE[0]
-            y_center = (abs_y + abs_h / 2) / BASE_SIZE[1]
-            width_norm = abs_w / BASE_SIZE[0]
-            height_norm = abs_h / BASE_SIZE[1]
-
-            # 边界修正
-            x_min = max(0.0 + TO_BORDER, x_center - width_norm / 2)
-            x_max = min(1.0 - TO_BORDER, x_center + width_norm / 2)
-            y_min = max(0.0 + TO_BORDER, y_center - height_norm / 2)
-            y_max = min(1.0 - TO_BORDER, y_center + height_norm / 2)
-
-            bboxes.append({
-                "class_id": augmented[1],
-                "x_center": (x_min + x_max) / 2,
-                "y_center": (y_min + y_max) / 2,
-                "width": x_max - x_min,
-                "height": y_max - y_min
-            })
-            used_targets[pixel_bbox["original_idx"]] = True
-            failed_attempts = 0
-        else:
-            failed_attempts += 1
-            if failed_attempts >= MAX_TARGET_FAILURE:
-                break
-    
-    # 最终增强处理（保持原有逻辑）
-    img_np = np.array(base)
-    if random.random() < 0.5:
-        img_np = apply_final_noise(img_np)
-        
-    base = Image.fromarray(img_np).convert("RGB")
-    
-    # 保存结果（保持原有逻辑）
-    try:
-        base.save(output_image_path, quality=95)
-        with open(label_path, 'w') as f:
-            for bbox in bboxes:
-                line = (
-                    f"{bbox['class_id']} "
-                    f"{bbox['x_center']:.6f} "
-                    f"{bbox['y_center']:.6f} "
-                    f"{bbox['width']:.6f} "
-                    f"{bbox['height']:.6f}\n"
-                )
-                f.write(line)
-    except Exception as e:
-        print(f"处理失败：{real_path}，原因：{e}")
-
+def count_txt_files_recursive(directory):
+    """统计标签文件数量"""
+    count = 0
+    for root, _, files in os.walk(directory):
+        for filename in files:
+            if filename.lower().endswith('.txt'):
+                count += 1
+    return count
 def apply_final_noise(img_np):
     """最终噪声增强"""
     # 高斯噪声
@@ -481,35 +300,284 @@ def apply_cutout(img_np):
             
     return img_np
 
+
+def place_target(base, target_tuple, placed_bboxes):
+    base = base.convert("RGBA")
+    target, class_id, original_idx, target_type = target_tuple
+    base_width, base_height = base.size
+    target_width, target_height = target.size
+
+    placed = False
+    for _ in range(MAX_OVERLAP_ATTEMPTS * 2):
+        # 使用随机生成策略确保坐标在图像内
+        x = random.randint(0, base_width - target_width)
+        y = random.randint(0, base_height - target_height)
+        new_bbox = {"x": x, "y": y, "width": target_width, "height": target_height}
+
+        # 检查重叠
+        overlap = False
+        safe_margin = max(target_width, target_height) * 0.1
+        for bbox in placed_bboxes:
+            dx = max(0, abs((x + target_width / 2) - (bbox['x'] + bbox['width'] / 2)) - (target_width + bbox['width']) / 2)
+            dy = max(0, abs((y + target_height / 2) - (bbox['y'] + bbox['height'] / 2)) - (target_height + bbox['height']) / 2)
+            if dx < safe_margin and dy < safe_margin:
+                overlap = True
+                break
+        if not overlap:
+            placed = True
+            break
+
+    if not placed:
+        return base, None
+
+    base.paste(target, (x, y), target.getchannel('A'))
+    return (
+        base.convert("RGB"),
+        {
+            "original_idx": original_idx,
+            "x": x,
+            "y": y,
+            "width": target_width,
+            "height": target_height,
+            "target_type": target_type
+        }
+    )
+
+# 共享内存管理器（Linux优化版）
+class SharedTargetManager:
+    def __init__(self, target_images):
+        self.target_images = target_images
+        self.num_targets = len(target_images)
+        # 创建共享内存数组（用于标记已使用靶标）
+        self.used_targets = multiprocessing.Array(ctypes.c_bool, [False] * self.num_targets)
+        self.lock = multiprocessing.Lock()
+    
+    def get_available_target(self):
+        """获取一个未使用的靶标（进程安全）"""
+        with self.lock:
+            available_indices = [i for i in range(self.num_targets) if not self.used_targets[i]]
+            if not available_indices:
+                return None, -1  # 所有靶标都已使用
+            
+            idx = random.choice(available_indices)
+            self.used_targets[idx] = True  # 标记为已使用
+            return self.target_images[idx], idx
+    
+    def all_targets_used(self):
+        """检查是否所有靶标都已使用"""
+        with self.lock:
+            return all(self.used_targets)
+    
+    def release_target(self, idx):
+        """释放靶标（标记为未使用）"""
+        if 0 <= idx < self.num_targets:
+            with self.lock:
+                self.used_targets[idx] = False
+
+# 全局共享管理器（每个epoch初始化）
+shared_manager = None
+
+def process_round(args):
+    """处理单轮生成（使用全局共享管理器）"""
+    round_num, epoch = args
+    global shared_manager
+    
+    # 设置进程独立随机种子
+    seed = (os.getpid() + int(time.time() * 1000) + round_num) % (2**32)
+    random.seed(seed)
+    np.random.seed(seed)
+    
+    # 检查是否所有目标都已使用
+    if shared_manager.all_targets_used():
+        return
+    
+    # 随机选择基底图片
+    real_image_idx = random.choice(range(1, 104))
+    real_path = os.path.join(REAL_IMAGES_DIR, f"{real_image_idx}.jpg")
+    
+    # 文件名加入进程ID防止冲突
+    output_image_path = os.path.join(
+        OUTPUT_DIR, 
+        f"E{epoch}_P{os.getpid()}_R{round_num}_img{real_image_idx}.jpg"
+    )
+    label_path = output_image_path.replace(".jpg", ".txt")
+    
+    base = random_crop(real_path)
+    bboxes = []
+    placed_bboxes = []
+    failed_attempts = 0
+    
+    # 记录本轮使用的靶标索引，用于错误处理
+    used_in_round = []
+    
+    for _ in range(NUM_TARGETS_PER_IMAGE):
+        # 获取可用靶标（进程安全）
+        target_data = shared_manager.get_available_target()
+        if not target_data:
+            break  # 没有可用靶标
+            
+        target_tuple, target_idx = target_data
+        used_in_round.append(target_idx)
+        
+        augmented = apply_augmentation(target_tuple)
+        target, class_id, _, target_type = augmented
+        
+        # 动态计算缩放比例
+        current_width, current_height = target.size
+        min_dim = min(current_width, current_height)
+        max_allowed_width = BASE_SIZE[0]
+        max_allowed_height = BASE_SIZE[1]
+        
+        width_scale = max_allowed_width / current_width
+        height_scale = max_allowed_height / current_height
+        max_safe_scale = min(width_scale, height_scale)
+        
+        # 缩放逻辑
+        if target_type == "original":
+            min_scale = 1.0
+            max_scale = min(3.0, max_safe_scale)
+        else:
+            min_scale = (MIN_TARGET_RATIO * min(BASE_SIZE)) / min_dim
+            max_scale = min(
+                (MAX_TARGET_RATIO * min(BASE_SIZE)) / min_dim,
+                max_safe_scale
+            )
+        
+        scale = random.uniform(min_scale, max_scale)
+        new_width = int(current_width * scale)
+        new_height = int(current_height * scale)
+        target = target.resize((new_width, new_height), Image.LANCZOS)
+        
+        # 创建包含原始索引的新元组
+        new_target_tuple = (target, class_id, target_idx, target_type)
+        placed_base, pixel_bbox = place_target(
+            base.copy(),
+            new_target_tuple,
+            placed_bboxes
+        )
+        
+        if pixel_bbox:
+            placed_bboxes.append({
+                "x": pixel_bbox['x'],
+                "y": pixel_bbox['y'],
+                "width": pixel_bbox['width'],
+                "height": pixel_bbox['height']
+            })
+            
+            base = placed_base
+            target_type = pixel_bbox['target_type']
+            target_width = pixel_bbox['width']
+            target_height = pixel_bbox['height']
+
+            # 修正标注框计算
+            if target_type in ["synthetic", "real_synthetic"]:
+                roi_x = 34 * target_width / 100.0
+                roi_y = 34 * target_height / 100.0
+                roi_w = 32 * target_width / 100.0
+                roi_h = 32 * target_height / 100.0
+
+                abs_x = pixel_bbox['x'] + roi_x
+                abs_y = pixel_bbox['y'] + roi_y
+                abs_w = roi_w
+                abs_h = roi_h
+
+            elif target_type == "original":
+                abs_x = pixel_bbox['x']
+                abs_y = pixel_bbox['y']
+                abs_w = target_width
+                abs_h = target_height
+
+            # 计算归一化坐标
+            x_center = (abs_x + abs_w / 2) / BASE_SIZE[0]
+            y_center = (abs_y + abs_h / 2) / BASE_SIZE[1]
+            width_norm = abs_w / BASE_SIZE[0]
+            height_norm = abs_h / BASE_SIZE[1]
+
+            # 边界修正
+            x_min = max(0.0 + TO_BORDER, x_center - width_norm / 2)
+            x_max = min(1.0 - TO_BORDER, x_center + width_norm / 2)
+            y_min = max(0.0 + TO_BORDER, y_center - height_norm / 2)
+            y_max = min(1.0 - TO_BORDER, y_center + height_norm / 2)
+
+            bboxes.append({
+                "class_id": class_id,
+                "x_center": (x_min + x_max) / 2,
+                "y_center": (y_min + y_max) / 2,
+                "width": x_max - x_min,
+                "height": y_max - y_min
+            })
+            failed_attempts = 0
+        else:
+            # 放置失败时释放靶标
+            shared_manager.release_target(target_idx)
+            used_in_round.remove(target_idx)
+            failed_attempts += 1
+            if failed_attempts >= MAX_TARGET_FAILURE:
+                break
+    
+    # 最终增强处理
+    img_np = np.array(base)
+    if random.random() < 0.5:
+        img_np = apply_final_noise(img_np)
+        
+    base = Image.fromarray(img_np).convert("RGB")
+    
+    # 保存结果
+    try:
+        base.save(output_image_path, quality=95)
+        with open(label_path, 'w') as f:
+            for bbox in bboxes:
+                line = (
+                    f"{bbox['class_id']} "
+                    f"{bbox['x_center']:.6f} "
+                    f"{bbox['y_center']:.6f} "
+                    f"{bbox['width']:.6f} "
+                    f"{bbox['height']:.6f}\n"
+                )
+                f.write(line)
+    except Exception as e:
+        print(f"处理失败：{real_path}，原因：{e}")
+        # 保存失败时释放所有使用的靶标
+        for idx in used_in_round:
+            shared_manager.release_target(idx)
+
 def one_epoch():
-    """单轮生成"""
+    """并行化单轮生成（使用全局共享管理器）"""
+    global shared_manager  # 声明全局变量
+    
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     target_images = load_target_images()
-    num_targets = len(target_images)
-    used_targets = [False] * num_targets
-    start_round = 0
+    shared_manager = SharedTargetManager(target_images)  # 初始化全局管理器
     
-    for round_num in tqdm(
-        range(NUM_ROUNDS),
-        desc=f"Epoch :{epoch + 1}",
-        total=NUM_ROUNDS,
-        dynamic_ncols=True,
-        miniters=1
-    ):
-        if all(used_targets):
-            print(f"Round {round_num}: 所有目标已用完，停止该轮处理")
-            break
-            
-        process_round(round_num, target_images, used_targets)
+    # 创建进程池
+    num_cores = max(1, multiprocessing.cpu_count() - 1)
+    pool = multiprocessing.Pool(processes=num_cores)
+    
+    # 准备任务参数（不再传递manager）
+    tasks = [(round_num, epoch) for round_num in range(NUM_ROUNDS)]
 
-def count_txt_files_recursive(directory):
-    """统计标签文件数量"""
-    count = 0
-    for root, _, files in os.walk(directory):
-        for filename in files:
-            if filename.lower().endswith('.txt'):
-                count += 1
-    return count
+    # 使用tqdm进度条
+    completed = 0
+    early_termination = False
+    with tqdm(total=NUM_ROUNDS, desc=f"Epoch {epoch+1}") as pbar:
+        # 处理结果
+        try:
+            for result in pool.imap_unordered(process_round, tasks):
+                pbar.update()
+                completed += 1
+                
+                # 提前终止检查
+                if shared_manager.all_targets_used() and not early_termination:
+                    print(f"所有靶标已用完，提前终止轮次生成 (已完成 {completed}/{NUM_ROUNDS} 轮)")
+                    early_termination = True
+                    pool.terminate()  # 终止剩余任务
+                    break
+        except Exception as e:
+            print(f"处理过程中发生错误: {e}")
+            pool.terminate()
+        finally:
+            pool.close()
+            pool.join()
 
 def main(epochs=10):
     """主函数"""
@@ -521,5 +589,11 @@ def main(epochs=10):
     print("所有轮次完成！")
 
 if __name__ == "__main__":
+    # 确保在Linux上正确使用fork
+    if multiprocessing.get_start_method() != "fork":
+        multiprocessing.set_start_method("fork", force=True)
+    
     main(EPOCHS)
     print(f"生成的标签文件数量：{count_txt_files_recursive(OUTPUT_DIR)}")
+    
+    
