@@ -17,7 +17,7 @@ def count_txt_files(directory):
         print("Invalid directory path.")
 
 if __name__ == "__main__":
-    directory = "/home/ling/zyt195/images/targets"
-    file_format = ".png"
+    directory = "/home/ling/zyt195/images/DATASET/val"
+    file_format = ".txt"
     txt_file_count=count_txt_files_recursive(directory,file_format)
     print(f"Number of {file_format} files in '{directory}': {txt_file_count}")

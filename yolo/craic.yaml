@@ -1,4 +1,4 @@
-path: /home/airhust/zyt/images/sec_dataset
+path: /home/ling/zyt195/images/DATASET
 train: train/images                
 val: val/images
 

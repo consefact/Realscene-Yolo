@@ -24,7 +24,7 @@ MAX_TARGET_RATIO = 0.6  # 目标最大占比
 MAX_TARGET_FAILURE = 8  # 最大失败次数
 MAX_OVERLAP_ATTEMPTS = 20  # 最大重叠检测次数
 TO_BORDER = 1e-6  # 边界安全距离
-NUM_ROUNDS = 3000  # 总生成轮数
+NUM_ROUNDS = 6000  # 总生成轮数
 
 APPLY_GEOMETRIC_AUG = False
 APPLY_INK_REFLECTION = False  # 是否应用油墨反光效果
