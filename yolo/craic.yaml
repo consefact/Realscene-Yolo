@@ -1,4 +1,4 @@
-path: /home/ling/zyt195/images/DATASET
+path: /home/ling/zyt195/images/HDATASET
 train: train/images                
 val: val/images
 

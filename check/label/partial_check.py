@@ -122,9 +122,9 @@ def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
             print(f"Saved: {output_path}")
 
 if __name__ == "__main__":
-    input_directory = "/home/ling/zyt195/images/TRAIN"
-    output_directory = "/home/ling/zyt195/images/train_samples"
-    num_samples = 100  # 修改此值调整抽样数量
+    input_directory = "/home/ling/zyt195/images/HN"
+    output_directory = "/home/ling/zyt195/images/HN_samples"
+    num_samples = 50  # 修改此值调整抽样数量
 
     # 获取所有有效文件
     valid_files = get_valid_files(input_directory)

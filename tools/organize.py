@@ -28,9 +28,9 @@ def main():
     # parser.add_argument('target_dir', help='输出 YOLO 数据集的根目录',default='/home/ling/zyt195/images/DATASET')
     # args = parser.parse_args()
 
-    train_source = "/home/ling/zyt195/images/TRAIN"
+    train_source = "/home/ling/zyt195/images/ANO"
     val_source = "/home/ling/zyt195/images/TEST"    
-    target_dir = "/home/ling/zyt195/images/DATASET"
+    target_dir = "/home/ling/zyt195/images/HDATASET"
     # 构建目标目录结构
     train_images = os.path.join(target_dir, 'train', 'images')
     train_labels = os.path.join(target_dir, 'train', 'labels')
