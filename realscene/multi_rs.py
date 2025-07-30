@@ -14,7 +14,7 @@ SYNTHETIC_DIR = "none"  # 合成靶标目录
 REAL_SYNTHETIC_DIR = "/home/ling/zyt195/images/targets"  # 真实合成靶标目录
 ORIGINAL_TARGET_DIR = "no"  # 原始识别区域目录
 OUTPUT_DIR = "/home/ling/zyt195/images/ANOTRAIN"
-EPOCHS = 8  # 总轮数
+EPOCHS = 1  # 总轮数
 BASE_SIZE = (1280, 1280)  # YOLO训练尺寸
 NUM_TARGETS_PER_IMAGE = 8  # 每张图像目标数量
 MIN_CROP_RATIO = 0.4  # 最小裁剪比例
@@ -24,15 +24,15 @@ MAX_TARGET_RATIO = 0.6  # 目标最大占比
 MAX_TARGET_FAILURE = 8  # 最大失败次数
 MAX_OVERLAP_ATTEMPTS = 20  # 最大重叠检测次数
 TO_BORDER = 1e-6  # 边界安全距离
-NUM_ROUNDS = 6000  # 总生成轮数
+NUM_ROUNDS = 100  # 总生成轮数
 
 APPLY_GEOMETRIC_AUG = False
 APPLY_INK_REFLECTION = False  # 是否应用油墨反光效果
 # 靶标类型定义
 TARGET_TYPES = {
-    "synthetic": 100,      # 合成靶标
-    "real_synthetic": 100, # 真实合成靶标
-    "original": 32         # 原始识别区域
+    "synthetic": 194,      # 合成靶标
+    "real_synthetic": 194, # 真实合成靶标
+    "original": 64         # 原始识别区域
 }
 
 CLASSES = [
@@ -471,10 +471,10 @@ def process_round(args):
 
             # 修正标注框计算
             if target_type in ["synthetic", "real_synthetic"]:
-                roi_x = 34 * target_width / 100.0
-                roi_y = 34 * target_height / 100.0
-                roi_w = 32 * target_width / 100.0
-                roi_h = 32 * target_height / 100.0
+                roi_x = 34 * target_width / 92.0
+                roi_y = 34 * target_height / 92.0
+                roi_w = 32 * target_width / 92.0
+                roi_h = 32 * target_height / 92.0
 
                 abs_x = pixel_bbox['x'] + roi_x
                 abs_y = pixel_bbox['y'] + roi_y
