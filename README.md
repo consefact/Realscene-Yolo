@@ -1,50 +1,74 @@
-## 一种基于靶标组件对于YOLO进行自动化真实情景增强的高效方式
+## 基于靶标组件拼贴的 YOLO 真实场景数据增强工具（通用版）
 
+一个「把目标当组件、在真实背景上拼贴并自动生成 YOLO 标注」的数据增强流水线。
+**换检测任务时，原则上只改根目录的 `config.yaml`，无需改任何脚本源码。**
 
+### 1. 核心思想
 
-### 1. 代码结构
+- 把「目标图」（整张图就是目标，或"底板 + 内部识别区"）在随机裁剪、增强过的背景图上拼贴；
+- 拼贴的同时按目标位置自动写出 YOLO 标注；
+- 支持大量几何/颜色/噪声增强，快速造出规模化训练集。
 
-./target 下的smooth_target.py 基于识别区域图和空靶标图生成有效靶标图。
+### 2. 唯一配置源：`config.yaml`
 
-./realscene 下的realscene.py 基于有效靶标图和背景图生成有效真实场景图。
+所有类别、路径、数量、增强开关、训练超参都集中在 `config.yaml`。脚本通过
+`from config import load_config` 读取（`config.py` 负责定位、解析、把相对路径解析为绝对路径）。
 
-./tools 下为工具，包含裁剪、整理数据集结构等。
+关键字段：
 
-./check 下为用于可视化检查的代码。
+- `classes`：类别列表，**下标即 class_id**；目标图须按 `<目标目录>/<类名>/*.png` 组织。
+- `paths.*`：背景、合成输出、数据集、训练结果等目录。
+- `synth.target_types`：每类目标的来源目录 `dir`、`roi`、缩放范围 `scale`。
+  - `roi: null` → **整张目标图就是检测框**（最常用）。
+  - `roi: [rx, ry, rw, rh]` → 目标是"底板"，**只框内部 ROI**（相对目标框的比例）。
+- `synth.num_workers`：`1` 用单进程 `realscene.py`；`>1` 用多进程 `multi_rs.py`。
+- `train.*`：训练超参；`yolo/craic.yaml` 由 `y8train.py` 依据本文件自动生成。
 
+### 3. 代码结构
 
+- `realscene/realscene.py`（单进程）/ `realscene/multi_rs.py`（多进程）：拼贴 + 自动标注核心。
+- `generate_letters.py`：**「整图即目标」范例生成器**（为每个类别画类名文字图）。
+- `target/smooth_target.py`：**「底板 + ROI」范例生成器**（把识别区贴到底板中心）。
+- `tools/`：采集（`manual_shot.py`）、裁剪（`auto_crop.py`）、重命名（`rename.py`）、
+  数据集整理（`organize.py`）、计数（`count.py`）。
+- `check/`：可视化检查（`label/` 看标注框，`yolo/` 看模型预测）。
+- `run.py`：对着场景自动连拍背景图。
+- `target/target_new.py`、`target/fast_target_new.py`、`target/make.py`：**遗留**的 CIFAR 期实现，未迁移到配置，仅作参考。
 
-
-
-### 2. 工作流
-
-```mermaid
-graph TD
-    A["拍摄并获取基础组件(背景/空靶标/识别区)"] --> B["对图片进行裁剪并整理"]
-    B --> C["基于smooth_target.py生成有效靶标图"]
-    C --> D["基于realscene.py生成有效真实场景图"]
-    D --> E["基于organize.py将相应的有效真实场景图目录组织成yolo数据集格式"]
-    E --> F["修改yaml，基于y8train.py运行yolo训练"]
-```
-
-
-
-### 3. 注意点
-
-拍摄时使用tools目录下manual_shot.py或run.py进行手动/自动的捕捉。
-
-可以使用auto_crop.py对系列图片进行同一裁剪。
-
-realscene.py中有若干可调整超参数，包括轮数(EPOCHS)，每轮最大生成数(ROUND)等等。开启几何增强可能导致yolo识别框出现略微偏移。
-
-
-
-### 4. 技术路线
+### 4. 工作流
 
 ```mermaid
 graph TD
-    A["问题提出：面对海量可能目标，如何组织有效数据集"] --> B["想法萌生：将靶标和识别区视为组件，在画布上进行拼贴"]
-    B --> C["实践:完成靶标和真实场景图的组装"]
-    C --> D["进一步引入各种增强"]
-    D --> E["完善其余小工具，正式完成"]
+    A["拍摄背景/目标(run.py, manual_shot.py)"] --> B["裁剪整理(auto_crop.py, rename.py)"]
+    B --> C["准备目标图: 整图 generate_letters.py / 底板 smooth_target.py / 或自备裁剪图"]
+    C --> D["拼贴+自动标注(realscene.py 或 multi_rs.py) → train_output/"]
+    D --> E["可视化检查标注(check/label/partial_check.py)"]
+    E --> F["整理数据集(organize.py) → HDATASET/"]
+    F --> G["训练(y8train.py，自动生成 craic.yaml) → yolo_run/"]
 ```
+
+### 5. 快速开始（默认配置 = 字母 A/B 示例）
+
+```bash
+conda env create -f yolo_env.yml && conda activate yolo
+
+python run.py                     # 1. 拍背景图（按 q 退出）→ save_frame/，整理进 backgrounds/
+python generate_letters.py        # 2. 生成目标图 → letter_targets/A、/B
+python realscene/realscene.py     # 3. 拼贴+标注 → train_output/（先把 config 的 num_rounds 调小验证）
+python check/label/partial_check.py  # 4. 抽查标注框是否正确
+python tools/organize.py          # 5. 切分数据集 → HDATASET/
+python yolo/y8train.py            # 6. 训练 → yolo_run/
+```
+
+### 6. 换成你自己的任务
+
+1. 改 `config.yaml` 的 `classes`。
+2. 准备目标图放进 `target_types.<类型>.dir/<类名>/`（整图即目标就设 `roi: null`）。
+3. 把背景照片放进 `paths.backgrounds`。
+4. 跑第 3~6 步即可。
+
+### 7. 注意点
+
+- **先验证再放量**：先把 `synth.num_rounds` 调到几十，跑完用 `partial_check.py` 确认标注框正确，再加量。
+- 开启 `synth.apply_geometric_aug` 等几何增强可能让识别框与目标出现细微偏移。
+- 背景图的多样性直接决定模型泛化能力——实际会在什么背景上出现，就拍什么背景。

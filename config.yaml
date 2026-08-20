@@ -1,0 +1,116 @@
+# ============================================================================
+# 通用 YOLO 数据增强流水线 —— 唯一配置源
+# 换检测任务时，原则上只需改本文件，无需改任何脚本源码。
+# 所有相对路径都相对本文件所在目录（项目根）解析。
+# ============================================================================
+
+# 类别列表：唯一来源。列表下标即 YOLO 的 class_id。
+# 目标图片须按 `<目标目录>/<类名>/*.png` 组织，子文件夹名要与这里完全一致。
+classes: [A, B]
+
+# ---------------------------------------------------------------------------
+# 路径（相对项目根；也可写绝对路径）
+# ---------------------------------------------------------------------------
+paths:
+  backgrounds:  ./backgrounds      # 背景图目录（realscene 的底图）
+  synth_output: ./train_output     # realscene/multi_rs 合成结果（图+标注）
+  dataset:      ./HDATASET         # organize 输出 / 训练数据集根
+  check_output: ./check_samples    # 可视化检查输出
+  yolo_runs:    ./yolo_run         # 训练 project 目录
+  base_weights: yolov8n.pt         # 训练起始权重
+
+# ---------------------------------------------------------------------------
+# 合成 + 自动标注（realscene.py / multi_rs.py 共用）
+# ---------------------------------------------------------------------------
+synth:
+  base_size: [640, 640]            # 输出图尺寸（YOLO 训练尺寸）
+  num_rounds: 3000                 # 生成轮数（先小规模验证，再放量）
+  epochs: 4                        # 总轮数
+  num_targets_per_image: 8         # 每张图最多贴几个目标
+  min_crop_ratio: 0.4              # 背景随机裁剪最小比例
+  max_crop_ratio: 0.9              # 背景随机裁剪最大比例
+  min_target_ratio: 0.2            # 目标占画布最小比例
+  max_target_ratio: 0.6            # 目标占画布最大比例
+  max_target_failure: 8            # 单图放置失败上限
+  max_overlap_attempts: 20         # 单目标找不重叠位置的尝试上限
+  to_border: 1.0e-6                # 归一化坐标的边界安全距离
+  apply_geometric_aug: false       # 背景四边形透视增强
+  apply_ink_reflection: false      # 油墨反光效果
+  num_workers: 1                   # 1 → 用 realscene.py（单进程）；>1 → 用 multi_rs.py（多进程）
+
+  # 目标类型：每类目标一个来源目录 + ROI 定义 + 缩放范围。
+  #   roi: null              → 整张目标图就是检测框（当前 A/B 方式，最常用）
+  #   roi: [rx, ry, rw, rh]  → 目标图是"底板"，只框内部 ROI（相对目标框的比例）
+  # 可配置多个类型，realscene 会全部加载并混合使用。
+  target_types:
+    real_synthetic:
+      dir: ./letter_targets
+      roi: null
+      scale: [0.5, 1.0]
+    # ---- 底板 + ROI 示例（复现原 CIFAR 版的 34/32 内缩，可按需启用）----
+    # synthetic:
+    #   dir: ./synthetic_targets
+    #   roi: [0.34, 0.34, 0.32, 0.32]
+    #   scale: [0.5, 1.0]
+    # ---- 真实识别区裁剪图（整图即目标，缩放范围偏大）----
+    # original:
+    #   dir: ./original_targets
+    #   roi: null
+    #   scale: [0.8, 1.2]
+
+# ---------------------------------------------------------------------------
+# 数据集切分（organize.py）
+# ---------------------------------------------------------------------------
+dataset:
+  val_ratio: 0.2                   # 验证集比例（train/val）
+
+# ---------------------------------------------------------------------------
+# 可视化检查（check/label/partial_check.py）
+# ---------------------------------------------------------------------------
+check:
+  num_samples: 50                  # partial_check 随机抽样可视化的数量
+
+# ---------------------------------------------------------------------------
+# 训练（y8train.py；craic.yaml 由此自动生成）
+# ---------------------------------------------------------------------------
+train:
+  epochs: 50
+  imgsz: 640
+  batch: 64
+  workers: 4
+  dropout: 0.5
+  patience: 20
+  optimizer: SGD
+  lr0: 0.001
+  run_name: letter_ab              # 训练结果子目录名（yolo_runs/<run_name>）
+
+# ---------------------------------------------------------------------------
+# 采集（run.py 自动连拍 / manual_shot.py 手动拍）
+# ---------------------------------------------------------------------------
+capture:
+  save_dir: ./save_frame
+  class_name: nowclass             # manual_shot 分类子目录名（按需改）
+  camera_index: 0
+  frame_width: 640
+  frame_height: 480
+  auto_every_n: 5                  # run.py 每隔 N 帧存一张
+
+# ---------------------------------------------------------------------------
+# 内置"整图即目标"范例生成器（generate_letters.py，仅演示用）
+# ---------------------------------------------------------------------------
+generate_letters:
+  output_dir: ./letter_targets
+  num_per_class: 500
+
+# ---------------------------------------------------------------------------
+# 内置"底板 + ROI"范例生成器（target/smooth_target.py，仅演示用）
+# 把 objects_dir/<类名>/*.png 里的识别区贴到底板中心，产出与上面 roi 对应的底板图。
+# ---------------------------------------------------------------------------
+smooth_target:
+  objects_dir: ./recognition_regions   # 识别区来源（按类分子目录）
+  real_targets_dir: none                # 真实空底板照片目录；none=用合成底板
+  output_dir: ./synthetic_targets       # 底板目标输出（对应某个 target_type.dir）
+  board_size: 100                       # 底板边长(px)
+  object_size: 32                       # 识别区缩放后边长(px)
+  paste_offset: 34                      # 识别区粘贴左上角偏移(px)；(board-object)/2 居中
+  prob_use_real: 1.0                    # 使用真实底板的概率（0~1）

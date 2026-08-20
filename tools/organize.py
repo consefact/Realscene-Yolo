@@ -1,57 +1,70 @@
 import os
+import sys
 import shutil
-import argparse
+import random
 
-def copy_images_and_labels(src_dir, img_dst, label_dst):
-    """
-    从源目录中复制图片和对应的标签文件到目标目录
-    """
-    supported_image_exts = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff')
+# --- 载入统一配置 ---
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT, "config.yaml")):
+    _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from config import load_config
+CFG = load_config()
 
-    for filename in os.listdir(src_dir):
-        if filename.lower().endswith(supported_image_exts):
-            image_path = os.path.join(src_dir, filename)
-            label_filename = os.path.splitext(filename)[0] + '.txt'
-            label_path = os.path.join(src_dir, label_filename)
 
-            if os.path.exists(label_path):
-                # 复制图片和标签
-                shutil.copy(image_path, os.path.join(img_dst, filename))
-                shutil.copy(label_path, os.path.join(label_dst, label_filename))
-            else:
-                print(f"⚠️ 警告：未找到与图片 {filename} 对应的标签文件 {label_filename}")
+def list_valid_pairs(src_dir):
+    """列出所有有对应标签的图片"""
+    supported_exts = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff')
+    pairs = []
+    for f in os.listdir(src_dir):
+        if f.lower().endswith(supported_exts):
+            label = os.path.splitext(f)[0] + '.txt'
+            if os.path.exists(os.path.join(src_dir, label)):
+                pairs.append(f)
+    return pairs
+
+
+def copy_pairs(file_list, src_dir, img_dst, label_dst):
+    """复制图片和标签到目标目录"""
+    os.makedirs(img_dst, exist_ok=True)
+    os.makedirs(label_dst, exist_ok=True)
+    for f in file_list:
+        base = os.path.splitext(f)[0]
+        shutil.copy(os.path.join(src_dir, f), os.path.join(img_dst, f))
+        shutil.copy(os.path.join(src_dir, base + '.txt'),
+                    os.path.join(label_dst, base + '.txt'))
+    print(f"  已复制 {len(file_list)} 对 → {img_dst}")
+
 
 def main():
-    # parser = argparse.ArgumentParser(description='将训练集和验证集整理为 YOLO 数据集结构')
-    # parser.add_argument('train_source', help='训练集源目录（包含图片和标签）',default='/home/ling/zyt195/images/TRAIN',)
-    # parser.add_argument('val_source', help='验证集源目录（包含图片和标签）',default='/home/ling/zyt195/images/TEST')
-    # parser.add_argument('target_dir', help='输出 YOLO 数据集的根目录',default='/home/ling/zyt195/images/DATASET')
-    # args = parser.parse_args()
+    src_dir = CFG.paths.synth_output
+    target_dir = CFG.paths.dataset
+    val_ratio = CFG.dataset.val_ratio  # 验证集比例
 
-    train_source = "/home/ling/zyt195/images/ANO"
-    val_source = "/home/ling/zyt195/images/TEST"    
-    target_dir = "/home/ling/zyt195/images/HDATASET"
-    # 构建目标目录结构
-    train_images = os.path.join(target_dir, 'train', 'images')
-    train_labels = os.path.join(target_dir, 'train', 'labels')
-    val_images = os.path.join(target_dir, 'val', 'images')
-    val_labels = os.path.join(target_dir, 'val', 'labels')
+    pairs = list_valid_pairs(src_dir)
+    if not pairs:
+        print(f"错误：{src_dir} 下没有找到图片+标签对")
+        return
 
-    # 创建目标目录（如果不存在）
-    os.makedirs(train_images, exist_ok=True)
-    os.makedirs(train_labels, exist_ok=True)
-    os.makedirs(val_images, exist_ok=True)
-    os.makedirs(val_labels, exist_ok=True)
+    random.shuffle(pairs)
+    split = int(len(pairs) * val_ratio)
+    val_files = pairs[:split]
+    train_files = pairs[split:]
 
-    # 处理训练集
-    print("🔄 正在处理训练集...")
-    copy_images_and_labels(train_source, train_images, train_labels)
+    print(f"共 {len(pairs)} 对，训练集 {len(train_files)} / 验证集 {len(val_files)}")
 
-    # 处理验证集
-    print("🔄 正在处理验证集...")
-    copy_images_and_labels(val_source, val_images, val_labels)
+    print("训练集...")
+    copy_pairs(train_files, src_dir,
+               os.path.join(target_dir, 'train', 'images'),
+               os.path.join(target_dir, 'train', 'labels'))
 
-    print("✅ 数据集整理完成！")
+    print("验证集...")
+    copy_pairs(val_files, src_dir,
+               os.path.join(target_dir, 'val', 'images'),
+               os.path.join(target_dir, 'val', 'labels'))
+
+    print(f"完成 → {target_dir}/")
+
 
 if __name__ == '__main__':
     main()

@@ -1,25 +1,17 @@
 import os
+import sys
 import random
 from PIL import Image, ImageDraw, ImageFont
 import colorsys
 
-
-CLASSES = [
-    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
-    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
-    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock',
-    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur',
-    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
-    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
-    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
-    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
-    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum',
-    'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark',
-    'shrew', 'skunk', 'skyscraper', 'snail', 'snake', 'spider', 'squirrel',
-    'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone',
-    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle',
-    'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
-]
+# --- 载入统一配置 ---
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT, "config.yaml")):
+    _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from config import load_config
+CFG = load_config()
+CLASSES = list(CFG.classes)
 def get_valid_files(input_dir):
     """获取所有有效图片文件（有对应txt标注）"""
     valid_files = []
@@ -37,8 +29,8 @@ def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    # 生成100种颜色
-    num_classes = 100
+    # 按实际类别数生成颜色
+    num_classes = len(CLASSES)
     colors = []
     for i in range(num_classes):
         hue = i * (360 / num_classes)
@@ -122,9 +114,9 @@ def draw_bounding_boxes(input_dir, output_dir, files_to_draw):
             print(f"Saved: {output_path}")
 
 if __name__ == "__main__":
-    input_directory = "/home/ling/zyt195/images/HN"
-    output_directory = "/home/ling/zyt195/images/HN_samples"
-    num_samples = 50  # 修改此值调整抽样数量
+    input_directory = CFG.paths.synth_output
+    output_directory = CFG.paths.check_output
+    num_samples = CFG.check.num_samples  # 抽样数量（改 config.yaml 的 check.num_samples）
 
     # 获取所有有效文件
     valid_files = get_valid_files(input_directory)
@@ -132,8 +124,8 @@ if __name__ == "__main__":
         print("No valid files found in the input directory!")
         exit()
 
-    # 随机选取样本
-    selected_files = random.sample(valid_files, k=num_samples)
+    # 随机选取样本（不足则全取）
+    selected_files = random.sample(valid_files, k=min(num_samples, len(valid_files)))
 
     # 执行可视化
     draw_bounding_boxes(input_directory, output_directory, selected_files)

@@ -5,12 +5,12 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser(description='Recursively crop images in a directory based on specified coordinates.')
-    parser.add_argument('--source', required=True, help='Source directory path',default='/path/to/source')
-    parser.add_argument('--target', required=True, help='Target directory path',default='/path/to/target')
-    parser.add_argument('--left', type=int, required=True,default=0)
-    parser.add_argument('--upper', type=int, required=True,default=0)
-    parser.add_argument('--right', type=int, required=True,default=1000)
-    parser.add_argument('--lower', type=int, required=True,default=1000)
+    parser.add_argument('--source', required=True, help='源图片目录')
+    parser.add_argument('--target', required=True, help='输出目录')
+    parser.add_argument('--left', type=int, required=True, help='裁剪左边界(px)')
+    parser.add_argument('--upper', type=int, required=True, help='裁剪上边界(px)')
+    parser.add_argument('--right', type=int, required=True, help='裁剪右边界(px)')
+    parser.add_argument('--lower', type=int, required=True, help='裁剪下边界(px)')
     args = parser.parse_args()
 
     source_dir = Path(args.source)

@@ -1,29 +1,23 @@
 import os
+import sys
 from PIL import Image, ImageDraw, ImageFont
-import colorsys  
-CLASSES = [
-    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
-    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
-    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock',
-    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur',
-    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
-    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
-    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
-    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
-    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum',
-    'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark',
-    'shrew', 'skunk', 'skyscraper', 'snail', 'snake', 'spider', 'squirrel',
-    'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone',
-    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle',
-    'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
-]
+import colorsys
+
+# --- 载入统一配置 ---
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT, "config.yaml")):
+    _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from config import load_config
+CFG = load_config()
+CLASSES = list(CFG.classes)
 def draw_yolo_boxes(input_dir, output_dir):
     # 创建输出目录
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # 生成100种不同颜色（基于HSV色轮）
-    num_classes = 100
+    # 按实际类别数生成颜色
+    num_classes = len(CLASSES)
     colors = []
     for i in range(num_classes):
         # 计算HSV色调值（0-360度）
@@ -117,6 +111,6 @@ def draw_yolo_boxes(input_dir, output_dir):
             print(f"Saved: {output_path}")
 
 if __name__ == "__main__":
-    input_directory = "/home/ling/zyt195/images/FORTEST"  # 输入目录
-    output_directory = "/home/ling/zyt195/images/checked_images"  # 输出目录
+    input_directory = CFG.paths.synth_output   # 输入目录
+    output_directory = CFG.paths.check_output  # 输出目录
     draw_yolo_boxes(input_directory, output_directory)

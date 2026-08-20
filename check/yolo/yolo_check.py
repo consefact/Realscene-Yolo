@@ -1,30 +1,27 @@
 import os
+import sys
 import random
 import argparse
 import cv2
 import colorsys
 from ultralytics import YOLO
-CLASSES = [
-    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
-    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
-    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock',
-    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur',
-    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
-    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
-    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
-    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
-    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum',
-    'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark',
-    'shrew', 'skunk', 'skyscraper', 'snail', 'snake', 'spider', 'squirrel',
-    'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone',
-    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle',
-    'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
-]
+
+# --- 载入统一配置 ---
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT, "config.yaml")):
+    _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from config import load_config
+CFG = load_config()
+CLASSES = list(CFG.classes)
 def main():
     parser = argparse.ArgumentParser(description="YOLOv8n Image Prediction")
     parser.add_argument("input_dir", type=str, help="Path to input directory with images")
     parser.add_argument("--output_dir", type=str, default="output", help="Directory to save results")
     parser.add_argument("--num_images", type=int, default=5, help="Number of images to process")
+    default_weights = os.path.join(CFG.paths.yolo_runs, CFG.train.run_name, "weights", "best.pt")
+    parser.add_argument("--weights", type=str, default=default_weights,
+                        help="训练得到的 .pt 权重路径（默认取 config 里 run 的 best.pt）")
     args = parser.parse_args()
 
     # 确保输出目录存在
@@ -41,8 +38,8 @@ def main():
         print("No valid images found in the input directory")
         return
     
-    # 生成100种不同颜色（基于HSV色轮）
-    num_classes = 100
+    # 按类别数生成颜色（基于HSV色轮）
+    num_classes = len(CLASSES)
     colors = []
 
     for i in range(num_classes):
@@ -61,7 +58,7 @@ def main():
     )
 
     # 加载YOLOv8n模型
-    model = YOLO("/home/ling/zyt195/yolo_run/secupgrade/weights/best.pt")
+    model = YOLO(args.weights)
 
     for img_name in selected_images:
         img_path = os.path.join(args.input_dir, img_name)

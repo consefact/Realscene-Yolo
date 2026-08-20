@@ -1,6 +1,7 @@
 import multiprocessing
 import random
 import os
+import sys
 import numpy as np
 from tqdm import tqdm
 import time
@@ -8,50 +9,59 @@ from PIL import Image, ImageEnhance
 import cv2
 import ctypes
 
-# 全局参数配置
-REAL_IMAGES_DIR = "/home/ling/zyt195/images/floor"
-SYNTHETIC_DIR = "none"  # 合成靶标目录
-REAL_SYNTHETIC_DIR = "/home/ling/zyt195/images/targets"  # 真实合成靶标目录
-ORIGINAL_TARGET_DIR = "no"  # 原始识别区域目录
-OUTPUT_DIR = "/home/ling/zyt195/images/ANOTRAIN"
-EPOCHS = 1  # 总轮数
-BASE_SIZE = (1280, 1280)  # YOLO训练尺寸
-NUM_TARGETS_PER_IMAGE = 8  # 每张图像目标数量
-MIN_CROP_RATIO = 0.4  # 最小裁剪比例
-MIN_TARGET_RATIO = 0.2  # 目标最小占比
-MAX_CROP_RATIO = 0.9  # 最大裁剪比例
-MAX_TARGET_RATIO = 0.6  # 目标最大占比
-MAX_TARGET_FAILURE = 8  # 最大失败次数
-MAX_OVERLAP_ATTEMPTS = 20  # 最大重叠检测次数
-TO_BORDER = 1e-6  # 边界安全距离
-NUM_ROUNDS = 100  # 总生成轮数
+# --- 载入统一配置（config.yaml 是唯一配置源）---
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT, "config.yaml")):
+    _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from config import load_config
+CFG = load_config()
 
-APPLY_GEOMETRIC_AUG = False
-APPLY_INK_REFLECTION = False  # 是否应用油墨反光效果
-# 靶标类型定义
-TARGET_TYPES = {
-    "synthetic": 194,      # 合成靶标
-    "real_synthetic": 194, # 真实合成靶标
-    "original": 64         # 原始识别区域
-}
+# 路径
+REAL_IMAGES_DIR = CFG.paths.backgrounds     # 背景图目录
+OUTPUT_DIR = CFG.paths.synth_output         # 合成结果
 
-CLASSES = [
-    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
-    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
-    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock',
-    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur',
-    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
-    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
-    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
-    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
-    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum',
-    'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark',
-    'shrew', 'skunk', 'skyscraper', 'snail', 'snake', 'spider', 'squirrel',
-    'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone',
-    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle',
-    'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
-]
-class_names = CLASSES  # 从config.py导入类别名称
+# 合成参数
+_S = CFG.synth
+EPOCHS = _S.epochs                          # 总轮数
+BASE_SIZE = tuple(_S.base_size)             # YOLO训练尺寸
+NUM_TARGETS_PER_IMAGE = _S.num_targets_per_image
+MIN_CROP_RATIO = _S.min_crop_ratio
+MIN_TARGET_RATIO = _S.min_target_ratio
+MAX_CROP_RATIO = _S.max_crop_ratio
+MAX_TARGET_RATIO = _S.max_target_ratio
+MAX_TARGET_FAILURE = _S.max_target_failure
+MAX_OVERLAP_ATTEMPTS = _S.max_overlap_attempts
+TO_BORDER = float(_S.to_border)             # 边界安全距离
+NUM_ROUNDS = _S.num_rounds
+APPLY_GEOMETRIC_AUG = _S.apply_geometric_aug
+APPLY_INK_REFLECTION = _S.apply_ink_reflection
+
+# 目标类型：{类型名: {dir, roi, scale}}
+#   roi=None            → 整张目标图就是检测框
+#   roi=[rx,ry,rw,rh]   → 目标是底板，只框内部 ROI（相对目标框的比例）
+TARGET_TYPES = dict(_S.target_types)
+TARGET_ROI = {t: (list(spec["roi"]) if spec.get("roi") else None)
+              for t, spec in TARGET_TYPES.items()}
+TARGET_SCALE = {t: tuple(spec.get("scale", [0.5, 1.0])) for t, spec in TARGET_TYPES.items()}
+
+CLASSES = list(CFG.classes)                 # 唯一类别源；下标即 class_id
+class_names = CLASSES
+
+# 背景图列表（one_epoch 中填充；fork 后子进程继承）
+bg_paths = []
+
+
+def list_background_images():
+    """列出背景图目录下所有图片文件"""
+    if not os.path.isdir(REAL_IMAGES_DIR):
+        return []
+    exts = {'.jpg', '.jpeg', '.png', '.bmp'}
+    files = []
+    for f in os.listdir(REAL_IMAGES_DIR):
+        if os.path.splitext(f)[1].lower() in exts:
+            files.append(os.path.join(REAL_IMAGES_DIR, f))
+    return files
 
 def apply_geometric_augmentation(base):
     """几何变换增强"""
@@ -130,29 +140,36 @@ def random_crop(image_path):
     """随机裁剪并增强"""
     img = Image.open(image_path)
     original_width, original_height = img.size
-    
+
+    if original_width < 2 or original_height < 2:
+        return Image.new("RGB", BASE_SIZE, (128, 128, 128))
+
     crop_width = random.randint(
-        int(original_width * MIN_CROP_RATIO),
-        int(original_width * MAX_CROP_RATIO)
+        max(1, int(original_width * MIN_CROP_RATIO)),
+        max(1, int(original_width * MAX_CROP_RATIO))
     )
     crop_height = int(crop_width * 3 / 4)  # 保持4:3比例
-    
-    x = random.randint(0, original_width - crop_width)
-    y = random.randint(0, original_height - crop_height)
+    crop_height = min(crop_height, original_height)
+
+    x = random.randint(0, max(1, original_width - crop_width))
+    y = random.randint(0, max(1, original_height - crop_height))
     cropped = img.crop((x, y, x+crop_width, y+crop_height))
     resized_img = cropped.resize(BASE_SIZE, Image.LANCZOS)
-    
+
     return apply_base_augmentation(resized_img)
 
 def load_target_images():
-    """加载所有类型靶标"""
+    """加载所有类型目标（依据 config.yaml 的 synth.target_types）"""
     target_images = []
-    dir_type_map = [
-        (SYNTHETIC_DIR, "synthetic"),
-        (REAL_SYNTHETIC_DIR, "real_synthetic"),
-        (ORIGINAL_TARGET_DIR, "original")
-    ]
-    
+    # 遍历配置里声明、且实际存在的目标目录
+    dir_type_map = []
+    for target_type, spec in TARGET_TYPES.items():
+        target_dir = spec.get("dir")
+        if target_dir and os.path.isdir(target_dir):
+            dir_type_map.append((target_dir, target_type))
+        else:
+            print(f"跳过 target_type '{target_type}'：目录不存在 {target_dir}")
+
     for target_dir, target_type in dir_type_map:
         for root, _, files in os.walk(target_dir):
             for file in files:
@@ -172,12 +189,10 @@ def load_target_images():
 def apply_augmentation(target_tuple):
     """靶标增强"""
     target, class_id, original_idx, target_type = target_tuple
-    scale = random.uniform(0.5, 1.0)
-    
-    # 根据类型调整缩放范围
-    if target_type == "original":
-        scale = random.uniform(0.8, 1.2)
-    
+    # 每类目标的初始缩放范围来自配置
+    lo, hi = TARGET_SCALE.get(target_type, (0.5, 1.0))
+    scale = random.uniform(lo, hi)
+
     new_size = (int(target.width * scale), int(target.height * scale))
     target = target.resize(new_size, Image.LANCZOS)
     
@@ -307,6 +322,10 @@ def place_target(base, target_tuple, placed_bboxes):
     base_width, base_height = base.size
     target_width, target_height = target.size
 
+    # 如果 target 比底图还大，跳过放置
+    if target_width > base_width or target_height > base_height:
+        return base.convert("RGB"), None
+
     placed = False
     for _ in range(MAX_OVERLAP_ATTEMPTS * 2):
         # 使用随机生成策略确保坐标在图像内
@@ -380,25 +399,25 @@ shared_manager = None
 def process_round(args):
     """处理单轮生成（使用全局共享管理器）"""
     round_num, epoch = args
-    global shared_manager
-    
+    global shared_manager, bg_paths
+
     # 设置进程独立随机种子
     seed = (os.getpid() + int(time.time() * 1000) + round_num) % (2**32)
     random.seed(seed)
     np.random.seed(seed)
-    
+
     # 检查是否所有目标都已使用
     if shared_manager.all_targets_used():
         return
-    
-    # 随机选择基底图片
-    real_image_idx = random.choice(range(1, 104))
-    real_path = os.path.join(REAL_IMAGES_DIR, f"{real_image_idx}.jpg")
-    
+
+    # 随机选择背景图片（通用扫描，不再假设文件名为 1.jpg…103.jpg）
+    real_path = random.choice(bg_paths)
+    fname = os.path.splitext(os.path.basename(real_path))[0]
+
     # 文件名加入进程ID防止冲突
     output_image_path = os.path.join(
-        OUTPUT_DIR, 
-        f"E{epoch}_P{os.getpid()}_R{round_num}_img{real_image_idx}.jpg"
+        OUTPUT_DIR,
+        f"E{epoch}_P{os.getpid()}_R{round_num}_{fname}.jpg"
     )
     label_path = output_image_path.replace(".jpg", ".txt")
     
@@ -469,19 +488,15 @@ def process_round(args):
             target_width = pixel_bbox['width']
             target_height = pixel_bbox['height']
 
-            # 修正标注框计算
-            if target_type in ["synthetic", "real_synthetic"]:
-                roi_x = 34 * target_width / 92.0
-                roi_y = 34 * target_height / 92.0
-                roi_w = 32 * target_width / 92.0
-                roi_h = 32 * target_height / 92.0
-
-                abs_x = pixel_bbox['x'] + roi_x
-                abs_y = pixel_bbox['y'] + roi_y
-                abs_w = roi_w
-                abs_h = roi_h
-
-            elif target_type == "original":
+            # ROI：roi=None → 整图即目标；roi=[rx,ry,rw,rh] → 只框底板内部区域
+            roi = TARGET_ROI.get(target_type)
+            if roi:
+                rx, ry, rw, rh = roi
+                abs_x = pixel_bbox['x'] + rx * target_width
+                abs_y = pixel_bbox['y'] + ry * target_height
+                abs_w = rw * target_width
+                abs_h = rh * target_height
+            else:
                 abs_x = pixel_bbox['x']
                 abs_y = pixel_bbox['y']
                 abs_w = target_width
@@ -543,10 +558,19 @@ def process_round(args):
 
 def one_epoch():
     """并行化单轮生成（使用全局共享管理器）"""
-    global shared_manager  # 声明全局变量
-    
+    global shared_manager, bg_paths  # 声明全局变量
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     target_images = load_target_images()
+    bg_paths = list_background_images()
+
+    if not bg_paths:
+        print("错误：backgrounds 目录下没有图片，请先用 run.py 拍摄背景图")
+        return
+    if not target_images:
+        print("错误：没有加载到任何目标图片，请先生成目标图")
+        return
+
     shared_manager = SharedTargetManager(target_images)  # 初始化全局管理器
     
     # 创建进程池

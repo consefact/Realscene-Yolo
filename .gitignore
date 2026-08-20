@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Editors
+.vscode/
+
+# Claude Code local settings (machine-specific allowlist)
+.claude/settings.local.json
+
+# Model weights (large / re-downloadable)
+*.pt
+
+# Archives
+*.zip
+
+# Raw captures / photos
+/pic/
+/save_frame/
+
+# Pipeline data & outputs (regenerated; not versioned)
+/backgrounds/
+/letter_targets/
+/train_output/
+/check_samples/
+/yolo_run/
+/HDATASET/
+/1/

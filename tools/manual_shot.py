@@ -1,10 +1,19 @@
 import cv2
 import os
+import sys
 from datetime import datetime
 
+# --- 载入统一配置 ---
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT, "config.yaml")):
+    _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from config import load_config
+CFG = load_config()
+
 # 全局变量定义
-SAVEPATH = './save_frame'
-NOWCLASS = 'nowclass'  # 指定保存图片的子目录名
+SAVEPATH = CFG.capture.save_dir
+NOWCLASS = CFG.capture.class_name  # 保存图片的子目录名（分类拍摄用）
 
 def main():
     # 创建主保存目录（若不存在）
@@ -14,9 +23,9 @@ def main():
     save_dir = os.path.join(SAVEPATH, NOWCLASS)
     os.makedirs(save_dir, exist_ok=True)
 
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap = cv2.VideoCapture(CFG.capture.camera_index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CFG.capture.frame_width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CFG.capture.frame_height)
 
     try:
         while True:
