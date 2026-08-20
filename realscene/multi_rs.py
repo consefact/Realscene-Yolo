@@ -26,6 +26,7 @@ _S = CFG.synth
 EPOCHS = _S.epochs                          # 总轮数
 BASE_SIZE = tuple(_S.base_size)             # YOLO训练尺寸
 NUM_TARGETS_PER_IMAGE = _S.num_targets_per_image
+BACKGROUND_RATIO = _S.get("background_ratio", 0.0)  # 空镜负样本比例
 MIN_CROP_RATIO = _S.min_crop_ratio
 MIN_TARGET_RATIO = _S.min_target_ratio
 MAX_CROP_RATIO = _S.max_crop_ratio
@@ -428,8 +429,11 @@ def process_round(args):
     
     # 记录本轮使用的靶标索引，用于错误处理
     used_in_round = []
-    
-    for _ in range(NUM_TARGETS_PER_IMAGE):
+
+    # 空镜负样本：按比例产出不含目标的图（bboxes 为空 → 空标签），降低误检
+    target_count = 0 if random.random() < BACKGROUND_RATIO else NUM_TARGETS_PER_IMAGE
+
+    for _ in range(target_count):
         # 获取可用靶标（进程安全）
         target_data = shared_manager.get_available_target()
         if not target_data:

@@ -23,6 +23,7 @@ _S = CFG.synth
 EPOCHS = _S.epochs                          # 总轮数
 BASE_SIZE = tuple(_S.base_size)             # YOLO训练尺寸
 NUM_TARGETS_PER_IMAGE = _S.num_targets_per_image
+BACKGROUND_RATIO = _S.get("background_ratio", 0.0)  # 空镜负样本比例
 MIN_CROP_RATIO = _S.min_crop_ratio
 MIN_TARGET_RATIO = _S.min_target_ratio
 MAX_CROP_RATIO = _S.max_crop_ratio
@@ -279,8 +280,11 @@ def process_round(round_num, target_images, used_targets, bg_paths):
     grid_size = max(2, min(5, int(NUM_TARGETS_PER_IMAGE**0.5)))
     available_cells = [(i, j) for i in range(grid_size) for j in range(grid_size)]
     random.shuffle(available_cells)
-    
-    for _ in range(NUM_TARGETS_PER_IMAGE):
+
+    # 空镜负样本：按比例产出不含目标的图（bboxes 为空 → 空标签），降低误检
+    target_count = 0 if random.random() < BACKGROUND_RATIO else NUM_TARGETS_PER_IMAGE
+
+    for _ in range(target_count):
         available_targets = [
             t for t in target_images if not used_targets[t[2]]
         ]

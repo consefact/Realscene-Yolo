@@ -27,6 +27,7 @@ synth:
   num_rounds: 3000                 # 生成轮数（先小规模验证，再放量）
   epochs: 4                        # 总轮数
   num_targets_per_image: 8         # 每张图最多贴几个目标
+  background_ratio: 0.1            # 空镜负样本比例：该比例的图不贴目标、标签为空（降低误检；0=关闭）
   min_crop_ratio: 0.4              # 背景随机裁剪最小比例
   max_crop_ratio: 0.9              # 背景随机裁剪最大比例
   min_target_ratio: 0.2            # 目标占画布最小比例
