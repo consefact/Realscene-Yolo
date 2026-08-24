@@ -19,7 +19,7 @@ CFG = load_config()
 
 
 def write_dataset_yaml(path):
-    """由 config.yaml 生成 ultralytics 数据集描述文件（craic.yaml）。"""
+    """由 config.yaml 生成 ultralytics 数据集描述文件（dataset.yaml）。"""
     data = {
         "path": CFG.paths.dataset,       # 数据集根（organize.py 输出）
         "train": "train/images",
@@ -36,7 +36,7 @@ def write_dataset_yaml(path):
 
 if __name__ == "__main__":
     t = CFG.train
-    data_yaml = write_dataset_yaml(os.path.join(_ROOT, "yolo", "craic.yaml"))
+    data_yaml = write_dataset_yaml(os.path.join(_ROOT, "yolo", "dataset.yaml"))
     print(f"数据集配置已生成：{data_yaml}  (nc={len(CFG.classes)}, names={CFG.classes})")
 
     # 起始权重：存在则用绝对路径，否则退化为文件名交给 ultralytics 自动下载

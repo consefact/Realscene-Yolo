@@ -22,7 +22,7 @@
   - `roi: null` → **整张目标图就是检测框**（最常用）。
   - `roi: [rx, ry, rw, rh]` → 目标是"底板"，**只框内部 ROI**（相对目标框的比例）。
 - `synth.num_workers`：`1` 用单进程 `realscene.py`；`>1` 用多进程 `multi_rs.py`。
-- `train.*`：训练超参；`yolo/craic.yaml` 由 `y8train.py` 依据本文件自动生成。
+- `train.*`：训练超参；`yolo/dataset.yaml` 由 `y8train.py` 依据本文件自动生成。
 
 ### 3. 代码结构
 
@@ -45,7 +45,7 @@ graph TD
     C --> D["拼贴+自动标注(realscene.py 或 multi_rs.py) → train_output/"]
     D --> E["可视化检查标注(check/label/partial_check.py)"]
     E --> F["整理数据集(organize.py) → HDATASET/"]
-    F --> G["训练(y8train.py，自动生成 craic.yaml) → yolo_run/"]
+    F --> G["训练(y8train.py，自动生成 dataset.yaml) → yolo_run/"]
 ```
 
 ### 5. 快速开始（当前 config.yaml 即一个任务实例，改它就是换任务）

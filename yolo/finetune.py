@@ -146,7 +146,7 @@ def main():
         "nc": len(CFG.classes),
         "names": {i: n for i, n in enumerate(CFG.classes)},
     }
-    data_yaml = os.path.join(_ROOT, "yolo", "craic_ft.yaml")
+    data_yaml = os.path.join(_ROOT, "yolo", "dataset_ft.yaml")
     with open(data_yaml, "w", encoding="utf-8") as f:
         f.write("# finetune.py 自动生成的混合数据集描述\n")
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)

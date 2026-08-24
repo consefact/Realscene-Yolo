@@ -35,7 +35,7 @@ __pycache__/
 
 # Inference outputs
 /predict_out/
-/yolo/craic_ft.yaml
+/yolo/dataset_ft.yaml
 
 # labeling tool
 /X-AnyLabeling/

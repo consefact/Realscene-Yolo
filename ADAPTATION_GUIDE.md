@@ -101,7 +101,7 @@ python check/label/partial_check.py   # 随机抽样画框，确认框住的是�
 # 6. 整理数据集
 python tools/organize.py              # 按 dataset.val_ratio 切分 → HDATASET/
 
-# 7. 训练（自动依据 config 生成 yolo/craic.yaml）
+# 7. 训练（自动依据 config 生成 yolo/dataset.yaml）
 python yolo/y8train.py
 
 # 8.（可选）看模型预测
