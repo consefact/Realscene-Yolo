@@ -26,3 +26,16 @@ __pycache__/
 /yolo_run/
 /HDATASET/
 /1/
+
+# 7-class task data
+/seven/
+
+# Raw captures / photos (other batches)
+/pic_/
+
+# Inference outputs
+/predict_out/
+/yolo/craic_ft.yaml
+
+# labeling tool
+/X-AnyLabeling/

@@ -27,11 +27,12 @@
 ### 3. 代码结构
 
 - `realscene/realscene.py`（单进程）/ `realscene/multi_rs.py`（多进程）：拼贴 + 自动标注核心。
-- `generate_letters.py`：**「整图即目标」范例生成器**（为每个类别画类名文字图）。
-- `target/smooth_target.py`：**「底板 + ROI」范例生成器**（把识别区贴到底板中心）。
+- `generate_letters.py`：**「整图即目标」范例生成器**（为每个类别画类名文字图，demo 用）。
+- `target/smooth_target.py`：**「底板 + ROI」范例生成器**（把识别区贴到底板中心，demo 用）。
 - `tools/`：采集（`manual_shot.py`）、裁剪（`auto_crop.py`）、重命名（`rename.py`）、
-  数据集整理（`organize.py`）、计数（`count.py`）。
-- `check/`：可视化检查（`label/` 看标注框，`yolo/` 看模型预测）。
+  数据集整理（`organize.py`）、标签转换（`json2yolo.py`）、计数（`count.py`）。
+- `check/`：可视化检查（`label/` 看标注框，`yolo/quick_test.py` 批量推理验证）。
+- `yolo/`：训练（`y8train.py`）、混合微调（`finetune.py`）。
 - `run.py`：对着场景自动连拍背景图。
 - `target/target_new.py`、`target/fast_target_new.py`、`target/make.py`：**遗留**的 CIFAR 期实现，未迁移到配置，仅作参考。
 
@@ -47,17 +48,17 @@ graph TD
     F --> G["训练(y8train.py，自动生成 craic.yaml) → yolo_run/"]
 ```
 
-### 5. 快速开始（默认配置 = 字母 A/B 示例）
+### 5. 快速开始（当前 config.yaml 即一个任务实例，改它就是换任务）
 
 ```bash
-conda env create -f yolo_env.yml && conda activate yolo
+conda env create -f yolo_env.yml && conda activate <你的环境>
 
-python run.py                     # 1. 拍背景图（按 q 退出）→ save_frame/，整理进 backgrounds/
-python generate_letters.py        # 2. 生成目标图 → letter_targets/A、/B
-python realscene/realscene.py     # 3. 拼贴+标注 → train_output/（先把 config 的 num_rounds 调小验证）
+python run.py                     # 1. 拍背景图（按 q 退出）→ save_frame/，整理进 paths.backgrounds
+python generate_letters.py        # 2. 生成示例目标图（仅演示，实际任务请自备目标图）
+python realscene/realscene.py     # 3. 拼贴+标注 → paths.synth_output（先把 config 的 num_rounds 调小验证）
 python check/label/partial_check.py  # 4. 抽查标注框是否正确
-python tools/organize.py          # 5. 切分数据集 → HDATASET/
-python yolo/y8train.py            # 6. 训练 → yolo_run/
+python tools/organize.py          # 5. 切分数据集 → paths.dataset
+python yolo/y8train.py            # 6. 训练 → paths.yolo_runs
 ```
 
 ### 6. 换成你自己的任务
