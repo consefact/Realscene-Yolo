@@ -18,9 +18,14 @@
 
 - `classes`：类别列表，**下标即 class_id**；目标图须按 `<目标目录>/<类名>/*.png` 组织。
 - `paths.*`：背景、合成输出、数据集、训练结果等目录。
-- `synth.target_types`：每类目标的来源目录 `dir`、`roi`、缩放范围 `scale`。
+- `synth.target_types`：每类目标的来源目录 `dir`、`roi`、缩放范围 `scale`、旋转 `rotate`、
+  羽化 `feather`、透明裁剪 `crop_transparent`。
   - `roi: null` → **整张目标图就是检测框**（最常用）。
   - `roi: [rx, ry, rw, rh]` → 目标是"底板"，**只框内部 ROI**（相对目标框的比例）。
+- `synth.aug`：**增强菜单**（分 base/target/final 三层，每层 `{num, extra_prob, menu}`；
+  每张图从菜单抽 num 种增强，每种按自身 prob 触发；全部可配置，换任务只改这里）。
+- `synth.profile`：可选，指向 `tools/calibrate_augment_profile.py` 生成的校准 YAML，
+  加载时与 `synth.aug` 深合并（数据驱动标定增强参数）。
 - `synth.num_workers`：`1` 用单进程 `realscene.py`；`>1` 用多进程 `multi_rs.py`。
 - `train.*`：训练超参；`yolo/dataset.yaml` 由 `y8train.py` 依据本文件自动生成。
 
@@ -30,7 +35,8 @@
 - `generate_letters.py`：**「整图即目标」范例生成器**（为每个类别画类名文字图，demo 用）。
 - `target/smooth_target.py`：**「底板 + ROI」范例生成器**（把识别区贴到底板中心，demo 用）。
 - `tools/`：采集（`manual_shot.py`）、裁剪（`auto_crop.py`）、重命名（`rename.py`）、
-  数据集整理（`organize.py`）、标签转换（`json2yolo.py`）、计数（`count.py`）。
+  数据集整理（`organize.py`）、标签转换（`json2yolo.py`）、增强标定（`calibrate_augment_profile.py`）、
+  计数（`count.py`）。
 - `check/`：可视化检查（`label/` 看标注框，`yolo/quick_test.py` 批量推理验证）。
 - `yolo/`：训练（`y8train.py`）、混合微调（`finetune.py`）。
 - `run.py`：对着场景自动连拍背景图。
