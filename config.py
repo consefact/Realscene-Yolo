@@ -37,6 +37,15 @@ def _wrap(obj):
     return obj
 
 
+def _merge(dst, src):
+    """把 src 深合并到 dst（dict 递归，其余覆盖）。"""
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _merge(dst[k], v)
+        else:
+            dst[k] = v
+
+
 def _abs(root, p):
     """把相对路径按 root 解析为绝对路径；绝对路径原样返回；空/None 返回原值。"""
     if not p or not isinstance(p, str):
@@ -91,6 +100,22 @@ def load_config(path=None):
 
     root = os.path.dirname(cfg_path)
     raw = _resolve_paths(raw, root)
+
+    # 校准增强 profile：synth.profile 指向的 YAML 深合并进 synth.aug（合成侧覆盖）
+    synth = raw.get("synth") or {}
+    prof = synth.get("profile")
+    if prof:
+        prof_path = _abs(root, prof)
+        if os.path.exists(prof_path):
+            with open(prof_path, "r", encoding="utf-8") as f:
+                pdata = yaml.safe_load(f) or {}
+            aug = synth.setdefault("aug", {})
+            if isinstance(pdata.get("aug"), dict):
+                _merge(aug, pdata["aug"])
+            synth["profile_applied"] = prof_path  # 记录来源便于可视化
+        else:
+            print(f"⚠️ config: synth.profile 不存在，忽略：{prof_path}")
+
     raw["_root"] = root  # 项目根，供脚本按需拼路径
     cfg = _wrap(raw)
     _cache[cfg_path] = cfg

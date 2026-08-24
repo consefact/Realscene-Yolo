@@ -36,9 +36,38 @@ synth:
   max_target_failure: 8            # 单图放置失败上限
   max_overlap_attempts: 20         # 单目标找不重叠位置的尝试上限
   to_border: 1.0e-6                # 归一化坐标的边界安全距离
-  apply_geometric_aug: false       # 背景四边形透视增强
-  apply_ink_reflection: false      # 油墨反光效果
+  jpeg_quality: 95                 # 合成图输出 JPEG 质量
   num_workers: 1                   # 1 → 用 realscene.py（单进程）；>1 → 用 multi_rs.py（多进程）
+  profile: null                    # 可选：校准工具生成的增强覆盖 YAML（tools/calibrate_augment_profile.py），
+                                   # 加载时与下面的 aug 段深合并（相对项目根）
+
+  # 增强菜单：每层一个菜单，每张图从菜单抽 num[0]~num[1] 种增强，抽完后以 extra_prob 再补一次。
+  # 项字段：type 必填；prob 触发概率；其余参数名随 type（range=[lo,hi] 统一为均匀采样）。
+  # 替换了旧式 apply_geometric_aug / apply_ink_reflection 开关——由菜单里的 prob 控制（0=关闭）。
+  aug:
+    base:                          # 背景增强（裁剪缩放到 base_size 之后、贴目标之前）
+      num: [2, 6]
+      extra_prob: 0.3
+      menu:
+        - {type: brightness, prob: 0.5, range: [0.6, 1.35]}
+        - {type: contrast,   prob: 0.5, range: [0.8, 1.2]}
+        - {type: color,       prob: 0.5, range: [0.5, 1.5]}
+        - {type: hsv,         prob: 0.5, delta: 0.1}
+        - {type: cutout,      prob: 0.5, mask_size: [50, 100], num_masks: [1, 5]}
+        - {type: geometric,   prob: 0.0, distortion: 0.1}   # 默认关闭（透视增强，开启可能改边框特征）
+    target:                        # 目标增强（贴入前，RGB 部分，alpha 保持不变）
+      menu:
+        - {type: brightness, prob: 1.0, range: [0.7, 1.35]}
+        - {type: contrast,   prob: 1.0, range: [0.8, 1.2]}
+        - {type: sharpness,  prob: 0.25, range: [0.8, 1.2]}
+        - {type: color,      prob: 0.35, range: [0.5, 1.5]}
+        - {type: flip,       prob: 0.5}
+    final:                         # 整图噪声（贴完所有目标之后）
+      menu:
+        - {type: gaussian,      prob: 0.5, var: [1, 10]}
+        - {type: salt_pepper,   prob: 0.3, amount: [0.001, 0.005]}
+        - {type: poisson,       prob: 0.3, intensity: 0.1}
+        - {type: ink_reflection, prob: 0.0}                  # 默认关闭（油墨反光，需要时开启）
 
   # 目标类型：每类目标一个来源目录 + ROI 定义 + 缩放范围。
   #   roi: null              → 整张目标图就是检测框（最常用）
@@ -48,7 +77,10 @@ synth:
     objects:
       dir: ./seven/targets           # 目标样例目录，按类分子目录（子目录名=classes）
       roi: null                      # 整图即目标；若目标是底板只想框内部，改成 [rx,ry,rw,rh]
-      scale: [0.5, 1.0]
+      scale: [0.5, 1.0]             # 目标初始缩放范围
+      rotate: [-45, 45]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
+      feather: 4                     # 边缘羽化半径(px)（消灭抠图硬边；0=关闭）
+      crop_transparent: true         # 贴入前裁掉 alpha=0 的透明边距（紧框更准）
     # ---- 底板 + ROI 示例（复现原 CIFAR 版的 34/32 内缩，可按需启用）----
     # synthetic:
     #   dir: ./synthetic_targets
