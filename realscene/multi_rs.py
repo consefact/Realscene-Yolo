@@ -35,6 +35,7 @@ MAX_TARGET_FAILURE = _S.max_target_failure
 MAX_OVERLAP_ATTEMPTS = _S.max_overlap_attempts
 TO_BORDER = float(_S.to_border)             # 边界安全距离
 NUM_ROUNDS = _S.num_rounds
+TARGET_REPEAT = max(1, int(_S.get("target_repeat", 1)))  # 每个目标每 epoch 复用次数（少图场景放大数据量）
 JPEG_QUALITY = int(_S.get("jpeg_quality", 95))
 
 # 增强菜单（from config.yaml synth.aug；校准 profile 已由 config.py 合并）
@@ -433,31 +434,32 @@ class SharedTargetManager:
     def __init__(self, target_images):
         self.target_images = target_images
         self.num_targets = len(target_images)
-        # 创建共享内存数组（用于标记已使用靶标）
-        self.used_targets = multiprocessing.Array(ctypes.c_bool, [False] * self.num_targets)
+        # 共享内存计数数组：各目标本 epoch 已被选中的次数（< TARGET_REPEAT 才可选）
+        self.used_targets = multiprocessing.Array(ctypes.c_int, [0] * self.num_targets)
         self.lock = multiprocessing.Lock()
-    
+
     def get_available_target(self):
-        """获取一个未使用的靶标（进程安全）"""
+        """获取一个可选中的靶标（进程安全，计数型）"""
         with self.lock:
-            available_indices = [i for i in range(self.num_targets) if not self.used_targets[i]]
+            available_indices = [i for i in range(self.num_targets)
+                                 if self.used_targets[i] < TARGET_REPEAT]
             if not available_indices:
-                return None, -1  # 所有靶标都已使用
-            
+                return None, -1  # 所有靶标已达复用上限
+
             idx = random.choice(available_indices)
-            self.used_targets[idx] = True  # 标记为已使用
+            self.used_targets[idx] += 1  # 计数 +1
             return self.target_images[idx], idx
-    
+
     def all_targets_used(self):
-        """检查是否所有靶标都已使用"""
+        """检查是否所有靶标都已用完"""
         with self.lock:
-            return all(self.used_targets)
-    
+            return all(u >= TARGET_REPEAT for u in self.used_targets)
+
     def release_target(self, idx):
-        """释放靶标（标记为未使用）"""
+        """释放靶标（回退一次选中计数）"""
         if 0 <= idx < self.num_targets:
             with self.lock:
-                self.used_targets[idx] = False
+                self.used_targets[idx] = max(0, self.used_targets[idx] - 1)
 
 # 全局共享管理器（每个epoch初始化）
 shared_manager = None
