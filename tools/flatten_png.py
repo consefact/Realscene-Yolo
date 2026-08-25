@@ -41,13 +41,14 @@ def random_gray_rgb():
     return (g, g, g)
 
 
-def flatten_one(src, bg_rgb, out_dir):
+def flatten_one(src, bg_rgb, out_dir, stem=""):
     """单张：透明区域铺纯色 → 存 JPG。无 alpha 的图直接复制。"""
     with Image.open(src) as im:
         base = im.convert("RGBA")
         bg = Image.new("RGB", base.size, bg_rgb)
         bg.paste(base, mask=base.getchannel("A"))   # alpha=0 → 纯色；alpha 半透 → 色+图过度
-        out = os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + ".jpg")
+        name = stem if stem else os.path.splitext(os.path.basename(src))[0]
+        out = os.path.join(out_dir, name + ".jpg")
         bg.save(out, quality=95)
         return out
 
@@ -60,6 +61,8 @@ def main():
                     help="每张图随机柔和彩色底（与 --bg 互斥；可与 --gray 联合）")
     ap.add_argument("--gray", dest="random_gray", action="store_true",
                     help="随机底改为黑白灰（R=G=B，需与 --random 联合使用）")
+    ap.add_argument("--count", type=int, default=1,
+                    help="每张原图生成 N 个不同随机底版本（仅 --random 下有意义，默认 1）")
     ap.add_argument("--seed", type=int, default=None, help="随机种子（--random 时可用，便于复现）")
     ap.add_argument("--out", default="", help="输出目录（默认 <path同目录>/flat/）")
     args = ap.parse_args()
@@ -69,6 +72,9 @@ def main():
         sys.exit(1)
     if args.random_gray and not args.random_bg:
         print("❌ --gray 需与 --random 联合使用（要固定灰则用 --bg 80,80,80）。")
+        sys.exit(1)
+    if args.count > 1 and not args.random_bg:
+        print(f"❌ --count {args.count} 只在 --random 下有意义（固定色重复产出相同内容）。")
         sys.exit(1)
 
     bg_rgb = None
@@ -106,14 +112,17 @@ def main():
                     print(f"  ⏭ 跳过（无透明通道）：{os.path.basename(f)}")
                     n_skip += 1
                     continue
-            if args.random_gray:
-                color = random_gray_rgb()
-            elif args.random_bg:
-                color = random_bg_rgb()
-            else:
-                color = bg_rgb
-            out = flatten_one(f, color, out_dir)
-            n_ok += 1
+            stem = os.path.splitext(os.path.basename(f))[0]
+            for k in range(args.count):
+                if args.random_gray:
+                    color = random_gray_rgb()
+                elif args.random_bg:
+                    color = random_bg_rgb()
+                else:
+                    color = bg_rgb
+                name = f"{stem}_{k}" if args.count > 1 else ""
+                flatten_one(f, color, out_dir, stem=name)
+                n_ok += 1
         except Exception as e:
             print(f"  ❌ {os.path.basename(f)}: {e}")
 
