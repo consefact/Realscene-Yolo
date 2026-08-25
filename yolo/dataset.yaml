@@ -1,0 +1,13 @@
+# 本文件由 y8train.py 依据 config.yaml 自动生成，请勿手改
+path: /home/airhust/consefact/Realscene-Yolo/delivery/HDATASET
+train: train/images
+val: val/images
+nc: 7
+names:
+  0: house
+  1: tent
+  2: tank
+  3: car
+  4: bridge
+  5: cross
+  6: H

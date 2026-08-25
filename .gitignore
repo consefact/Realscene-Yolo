@@ -21,10 +21,10 @@ __pycache__/
 # Pipeline data & outputs (regenerated; not versioned)
 /backgrounds/
 /letter_targets/
-/train_output/
-/check_samples/
+*/train_output/
+*/check_samples/
 /yolo_run/
-/HDATASET/
+*/HDATASET/
 /1/
 
 # 7-class task data

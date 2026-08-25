@@ -13,12 +13,12 @@ classes: [house, tent, tank, car, bridge, cross, H]
 # 路径（相对项目根；也可写绝对路径）
 # ---------------------------------------------------------------------------
 paths:
-  backgrounds:  ./delivery/backgrounds      # 背景图目录（realscene 的底图）
-  synth_output: ./delivery/train_output     # realscene/multi_rs 合成结果（图+标注）
-  dataset:      ./delivery/HDATASET         # organize 输出 / 训练数据集根
-  check_output: ./delivery/check_samples    # 可视化检查输出
+  backgrounds:  ./delivery-2/backgrounds      # 背景图目录（realscene 的底图）
+  synth_output: ./delivery-2/train_output     # realscene/multi_rs 合成结果（图+标注）
+  dataset:      ./delivery-2/HDATASET         # organize 输出 / 训练数据集根
+  check_output: ./delivery-2/check_samples    # 可视化检查输出
   yolo_runs:    ./yolo_run               # 训练 project 目录
-  base_weights: yolov8n.pt               # 训练起始权重
+  base_weights: yolo26n.pt               # 训练起始权重
 
 # ---------------------------------------------------------------------------
 # 合成 + 自动标注（realscene.py / multi_rs.py 共用）
@@ -75,7 +75,7 @@ synth:
   # 可配置多个类型，realscene 会全部加载并混合使用。
   target_types:
     objects:
-      dir: ./delivery/targets           # 目标样例目录，按类分子目录（子目录名=classes）
+      dir: ./delivery-2/target           # 目标样例目录，按类分子目录（子目录名=classes）
       roi: null                      # 整图即目标；若目标是底板只想框内部，改成 [rx,ry,rw,rh]
       scale: [0.5, 1.0]             # 目标初始缩放范围
       rotate: [-45, 45]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
@@ -110,25 +110,25 @@ check:
 train:
   epochs: 200
   imgsz: 640                       # 训练/推理尺寸（与导出 ONNX、X-AnyLabeling 推理保持一致）
-  batch: 64
+  batch: 128
   workers: 4
   dropout: 0.5
-  patience: 100
-  optimizer: SGD
+  patience: 60
+  optimizer: MuSGD               # YOLO26的官方指定优化器，结合了SGD和Muon的优点，效果出色
   lr0: 0.001
-  run_name: delivery            # 训练结果子目录名（yolo_runs/<run_name>）
+  run_name: delivery-2            # 训练结果子目录名（yolo_runs/<run_name>）
 
 # ---------------------------------------------------------------------------
 # 微调（finetune.py：从 best.pt 出发，混入实拍标注数据继续训，避免灾难性遗忘）
 # 前置：实拍图需已标注（可先用 quick_test.py --save-labels 预标注再人工纠正）
 # ---------------------------------------------------------------------------
 finetune:
-  real_dir: ./delivery/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
+  real_dir: ./delivery-2/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
   oversample: 5                    # 实拍图在训练集里的重复倍数（少量真实数据加权）
   epochs: 200
   lr0: 0.001                       # 小学习率，避免冲垮预训练权重
   freeze: 0                        # 冻结前 N 层（0=不冻结；实拍很少可试 10）
-  run_name: delivery_ft         # 微调输出子目录（不覆盖原 best.pt）
+  run_name: delivery-2_ft         # 微调输出子目录（不覆盖原 best.pt）
 
 # ---------------------------------------------------------------------------
 # 采集（run.py 自动连拍 / manual_shot.py 手动拍）
