@@ -35,6 +35,12 @@ def random_bg_rgb():
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
+def random_gray_rgb():
+    """随机黑白灰背影：R=G=B，明度均匀（含极暗/极亮，模拟不同明度板面）。"""
+    g = int(round(random.uniform(0.05, 0.95) * 255))
+    return (g, g, g)
+
+
 def flatten_one(src, bg_rgb, out_dir):
     """单张：透明区域铺纯色 → 存 JPG。无 alpha 的图直接复制。"""
     with Image.open(src) as im:
@@ -51,13 +57,18 @@ def main():
     ap.add_argument("path", help="单张图片 / 目录（递归）")
     ap.add_argument("--bg", default="200,200,200", help="背景色 R,G,B（默认 200,200,200 浅灰）")
     ap.add_argument("--random", dest="random_bg", action="store_true",
-                    help="每张图随机柔和彩色底（与 --bg 互斥）")
+                    help="每张图随机柔和彩色底（与 --bg 互斥；可与 --gray 联合）")
+    ap.add_argument("--gray", dest="random_gray", action="store_true",
+                    help="随机底改为黑白灰（R=G=B，需与 --random 联合使用）")
     ap.add_argument("--seed", type=int, default=None, help="随机种子（--random 时可用，便于复现）")
     ap.add_argument("--out", default="", help="输出目录（默认 <path同目录>/flat/）")
     args = ap.parse_args()
 
     if args.random_bg and args.bg != "200,200,200":
         print("❌ --random 与 --bg 互斥，只能二选一。")
+        sys.exit(1)
+    if args.random_gray and not args.random_bg:
+        print("❌ --gray 需与 --random 联合使用（要固定灰则用 --bg 80,80,80）。")
         sys.exit(1)
 
     bg_rgb = None
@@ -70,7 +81,8 @@ def main():
             sys.exit(1)
     else:
         random.seed(args.seed)
-        print("模式：每张随机背景色（HSV 柔和采样）")
+        print("模式：每张随机背景色（HSV 柔和采样）" if not args.random_gray
+              else "模式：每张随机背景色（黑白灰）")
 
     src = os.path.abspath(args.path)
     if os.path.isfile(src):
@@ -94,7 +106,12 @@ def main():
                     print(f"  ⏭ 跳过（无透明通道）：{os.path.basename(f)}")
                     n_skip += 1
                     continue
-            color = random_bg_rgb() if args.random_bg else bg_rgb
+            if args.random_gray:
+                color = random_gray_rgb()
+            elif args.random_bg:
+                color = random_bg_rgb()
+            else:
+                color = bg_rgb
             out = flatten_one(f, color, out_dir)
             n_ok += 1
         except Exception as e:
