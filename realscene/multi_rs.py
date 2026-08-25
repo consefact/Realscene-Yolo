@@ -282,9 +282,14 @@ def random_crop(image_path):
     return apply_aug_menu(resized, AUG_MENUS.get("base", {"menu": []}))
 
 def load_target_images():
-    """加载所有类型目标（依据 config.yaml 的 synth.target_types）"""
+    """加载所有类型目标（依据 config.yaml 的 synth.target_types）。
+
+    目标目录顶层支持两种布局：
+      <dir>/<类名>/xxx.png   文件夹类，类名 = 子目录名（文件可任意嵌套）
+      <dir>/<类名>.png       单图类，类名 = 文件名去掉扩展名（无需建文件夹）
+    同名冲突（同名的文件夹和图片文件同时存在）→ 报错退出。
+    """
     target_images = []
-    # 遍历配置里声明、且实际存在的目标目录
     dir_type_map = []
     for target_type, spec in TARGET_TYPES.items():
         target_dir = spec.get("dir")
@@ -293,22 +298,48 @@ def load_target_images():
         else:
             print(f"跳过 target_type '{target_type}'：目录不存在 {target_dir}")
 
+    IMG_EXT = ('.png', '.jpg', '.jpeg')
+
     for target_dir, target_type in dir_type_map:
-        for root, _, files in os.walk(target_dir):
-            for file in files:
-                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    path = os.path.join(root, file)
-                    try:
-                        img = np.array(Image.open(path).convert("RGBA"))
-                        if TARGET_CROP_TRANSPARENT.get(target_type, True):
-                            img = _crop_transparent(img)
-                        category = os.path.basename(os.path.dirname(path))
-                        class_id = class_names.index(category)
-                        target_images.append(
-                            (img, class_id, len(target_images), target_type)
-                        )
-                    except Exception as e:
-                        print(f"加载失败：{path}，原因：{e}")
+        dir_classes, file_classes = [], []
+        for entry in sorted(os.listdir(target_dir)):
+            full = os.path.join(target_dir, entry)
+            if os.path.isdir(full):
+                dir_classes.append(entry)
+            elif entry.lower().endswith(IMG_EXT):
+                file_classes.append(os.path.splitext(entry)[0])
+
+        # 同名冲突：文件夹类名 与 单图文件名（任意扩展名）同时存在 → 报错退出
+        conflicts = [
+            dc for dc in dir_classes
+            if any(os.path.exists(os.path.join(target_dir, dc + e)) for e in IMG_EXT)
+        ]
+        if conflicts:
+            print(f"❌ '{target_dir}' 下类名冲突（既是文件夹又是单图）：{conflicts}")
+            print("   请只保留一种布局：要么删除文件夹（把图平铺到该目录），要么删除同名图片文件。")
+            sys.exit(1)
+
+        def add_image(path, category):
+            try:
+                img = np.array(Image.open(path).convert("RGBA"))
+                if TARGET_CROP_TRANSPARENT.get(target_type, True):
+                    img = _crop_transparent(img)
+                class_id = class_names.index(category)
+                target_images.append((img, class_id, len(target_images), target_type))
+            except Exception as e:
+                print(f"加载失败：{path}，原因：{e}")
+
+        for dc in dir_classes:
+            class_dir = os.path.join(target_dir, dc)
+            for root, _, files in os.walk(class_dir):
+                for file in files:
+                    if file.lower().endswith(IMG_EXT):
+                        add_image(os.path.join(root, file), dc)   # 类名 = 顶层目录名
+        for fc in file_classes:
+            for e in IMG_EXT:
+                path = os.path.join(target_dir, fc + e)
+                if os.path.exists(path):
+                    add_image(path, fc)                          # 类名 = 文件 stem
     return target_images
 
 def apply_augmentation(target_tuple):
