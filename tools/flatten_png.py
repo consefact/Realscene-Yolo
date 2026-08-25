@@ -113,6 +113,11 @@ def main():
                     n_skip += 1
                     continue
             stem = os.path.splitext(os.path.basename(f))[0]
+            # --count>1：这 N 个随机版本放进以原图命名的子文件夹
+            dest = out_dir
+            if args.count > 1:
+                dest = os.path.join(out_dir, stem)
+                os.makedirs(dest, exist_ok=True)
             for k in range(args.count):
                 if args.random_gray:
                     color = random_gray_rgb()
@@ -121,7 +126,7 @@ def main():
                 else:
                     color = bg_rgb
                 name = f"{stem}_{k}" if args.count > 1 else ""
-                flatten_one(f, color, out_dir, stem=name)
+                flatten_one(f, color, dest, stem=name)
                 n_ok += 1
         except Exception as e:
             print(f"  ❌ {os.path.basename(f)}: {e}")
