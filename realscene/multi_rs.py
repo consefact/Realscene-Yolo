@@ -501,8 +501,8 @@ def process_round(args):
     for _ in range(target_count):
         # 获取可用靶标（进程安全）
         target_data = shared_manager.get_available_target()
-        if not target_data:
-            break  # 没有可用靶标
+        if target_data is None or target_data[1] < 0:
+            break  # 没有可用靶标（get_available_target 空标记为 (None, -1)，truthy 需显式判断）
             
         target_tuple, target_idx = target_data
         used_in_round.append(target_idx)
