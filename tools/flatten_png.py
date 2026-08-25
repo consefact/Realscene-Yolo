@@ -7,11 +7,13 @@
 用法：
   python tools/flatten_png.py <path>                     # path 可为单张图或目录
   python tools/flatten_png.py <dir> --bg 40,110,180      # 指定背景色 (R,G,B)
+  python tools/flatten_png.py <dir> --random             # 每张随机柔和彩色底（--bg 互斥）
   python tools/flatten_png.py <dir> --out <输出目录>       # 指定输出位置
 输出：同名 .jpg（不透明），写入 <out>（默认 <path 同目录>/flat/）。
 """
 import os
 import sys
+import random
 import argparse
 
 # --- 载入统一配置（相对路径项目根）---
@@ -21,8 +23,16 @@ while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT,
 sys.path.insert(0, _ROOT)
 
 from PIL import Image
+import colorsys
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp")
+
+
+def random_bg_rgb():
+    """随机柔和彩色背影：H 任意、S/V 适中（分散、不刺眼、不极端暗）。"""
+    h, s, v = random.random(), random.uniform(0.3, 0.9), random.uniform(0.4, 0.95)
+    r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    return (int(r * 255), int(g * 255), int(b * 255))
 
 
 def flatten_one(src, bg_rgb, out_dir):
@@ -40,15 +50,27 @@ def main():
     ap = argparse.ArgumentParser(description="给带透明通道的图片铺纯色背景（转不透明）")
     ap.add_argument("path", help="单张图片 / 目录（递归）")
     ap.add_argument("--bg", default="200,200,200", help="背景色 R,G,B（默认 200,200,200 浅灰）")
+    ap.add_argument("--random", dest="random_bg", action="store_true",
+                    help="每张图随机柔和彩色底（与 --bg 互斥）")
+    ap.add_argument("--seed", type=int, default=None, help="随机种子（--random 时可用，便于复现）")
     ap.add_argument("--out", default="", help="输出目录（默认 <path同目录>/flat/）")
     args = ap.parse_args()
 
-    try:
-        bg_rgb = tuple(int(x) for x in args.bg.split(","))
-        assert len(bg_rgb) == 3
-    except Exception:
-        print(f"❌ --bg 格式错误，应为 R,G,B（如 40,110,180），收到：{args.bg}")
+    if args.random_bg and args.bg != "200,200,200":
+        print("❌ --random 与 --bg 互斥，只能二选一。")
         sys.exit(1)
+
+    bg_rgb = None
+    if not args.random_bg:
+        try:
+            bg_rgb = tuple(int(x) for x in args.bg.split(","))
+            assert len(bg_rgb) == 3
+        except Exception:
+            print(f"❌ --bg 格式错误，应为 R,G,B（如 40,110,180），收到：{args.bg}")
+            sys.exit(1)
+    else:
+        random.seed(args.seed)
+        print("模式：每张随机背景色（HSV 柔和采样）")
 
     src = os.path.abspath(args.path)
     if os.path.isfile(src):
@@ -72,7 +94,8 @@ def main():
                     print(f"  ⏭ 跳过（无透明通道）：{os.path.basename(f)}")
                     n_skip += 1
                     continue
-            out = flatten_one(f, bg_rgb, out_dir)
+            color = random_bg_rgb() if args.random_bg else bg_rgb
+            out = flatten_one(f, color, out_dir)
             n_ok += 1
         except Exception as e:
             print(f"  ❌ {os.path.basename(f)}: {e}")
