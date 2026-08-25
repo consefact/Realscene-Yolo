@@ -1,0 +1,84 @@
+"""给带透明通道的 PNG 铺上纯色背景（转成不透明 JPG/PNG）。
+
+用途：把抠好的透明图平铺成"纯色背景 + 物体"的素材图，
+方便作为 target（整图即目标）、或导出给不支持透明的工具/场景。
+透明区域填纯色；物体区域保持原像素。
+
+用法：
+  python tools/flatten_png.py <path>                     # path 可为单张图或目录
+  python tools/flatten_png.py <dir> --bg 40,110,180      # 指定背景色 (R,G,B)
+  python tools/flatten_png.py <dir> --out <输出目录>       # 指定输出位置
+输出：同名 .jpg（不透明），写入 <out>（默认 <path 同目录>/flat/）。
+"""
+import os
+import sys
+import argparse
+
+# --- 载入统一配置（相对路径项目根）---
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT, "config.yaml")):
+    _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+
+from PIL import Image
+
+IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp")
+
+
+def flatten_one(src, bg_rgb, out_dir):
+    """单张：透明区域铺纯色 → 存 JPG。无 alpha 的图直接复制。"""
+    with Image.open(src) as im:
+        base = im.convert("RGBA")
+        bg = Image.new("RGB", base.size, bg_rgb)
+        bg.paste(base, mask=base.getchannel("A"))   # alpha=0 → 纯色；alpha 半透 → 色+图过度
+        out = os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + ".jpg")
+        bg.save(out, quality=95)
+        return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description="给带透明通道的图片铺纯色背景（转不透明）")
+    ap.add_argument("path", help="单张图片 / 目录（递归）")
+    ap.add_argument("--bg", default="200,200,200", help="背景色 R,G,B（默认 200,200,200 浅灰）")
+    ap.add_argument("--out", default="", help="输出目录（默认 <path同目录>/flat/）")
+    args = ap.parse_args()
+
+    try:
+        bg_rgb = tuple(int(x) for x in args.bg.split(","))
+        assert len(bg_rgb) == 3
+    except Exception:
+        print(f"❌ --bg 格式错误，应为 R,G,B（如 40,110,180），收到：{args.bg}")
+        sys.exit(1)
+
+    src = os.path.abspath(args.path)
+    if os.path.isfile(src):
+        files = [src]
+    elif os.path.isdir(src):
+        files = [os.path.join(r, f) for r, _, fs in os.walk(src)
+                 for f in fs if f.lower().endswith(IMG_EXT)]
+    else:
+        print(f"❌ 输入不存在：{src}")
+        sys.exit(1)
+
+    out_dir = os.path.abspath(args.out) if args.out else os.path.join(
+        os.path.dirname(src.rstrip(os.sep)), "flat")
+    os.makedirs(out_dir, exist_ok=True)
+
+    n_ok = n_skip = 0
+    for f in files:
+        try:
+            with Image.open(f) as im:
+                if im.mode not in ("RGBA", "LA") and "transparency" not in im.info:
+                    print(f"  ⏭ 跳过（无透明通道）：{os.path.basename(f)}")
+                    n_skip += 1
+                    continue
+            out = flatten_one(f, bg_rgb, out_dir)
+            n_ok += 1
+        except Exception as e:
+            print(f"  ❌ {os.path.basename(f)}: {e}")
+
+    print(f"完成：铺底 {n_ok} 张 → {out_dir}" + (f"（跳过无透明 {n_skip}）" if n_skip else ""))
+
+
+if __name__ == "__main__":
+    main()
