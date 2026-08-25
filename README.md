@@ -61,7 +61,7 @@ conda env create -f yolo_env.yml && conda activate <你的环境>
 
 python run.py                     # 1. 拍背景图（按 q 退出）→ save_frame/，整理进 paths.backgrounds
 python generate_letters.py        # 2. 生成示例目标图（仅演示，实际任务请自备目标图）
-python realscene/realscene.py     # 3. 拼贴+标注 → paths.synth_output（先把 config 的 num_rounds 调小验证）
+python realscene/realscene.py     # 3. 拼贴+标注 → paths.synth_output（先 epochs=1~2 小规模验证，再放量）
 python check/label/partial_check.py  # 4. 抽查标注框是否正确
 python tools/organize.py          # 5. 切分数据集 → paths.dataset
 python yolo/y8train.py            # 6. 训练 → paths.yolo_runs
@@ -76,6 +76,8 @@ python yolo/y8train.py            # 6. 训练 → paths.yolo_runs
 
 ### 7. 注意点
 
-- **先验证再放量**：先把 `synth.num_rounds` 调到几十，跑完用 `partial_check.py` 确认标注框正确，再加量。
+- **先验证再放量**：数据量开关是 **`synth.epochs`**（每 epoch 扫一遍全目标池；总图数 ≈ epochs × 单 epoch 产出）。
+  `synth.num_rounds` 只是单 epoch 的图数**上限**（目标池用完即停），调大它不会多产、保持默认即可。
+  验证阶段把 epochs 调到 1~2，跑完用 `partial_check.py` 确认标注框正确，再把 epochs 加到想要的数据量。
 - 开启 `synth.apply_geometric_aug` 等几何增强可能让识别框与目标出现细微偏移。
 - 背景图的多样性直接决定模型泛化能力——实际会在什么背景上出现，就拍什么背景。
