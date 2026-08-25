@@ -32,6 +32,7 @@ MAX_TARGET_FAILURE = _S.max_target_failure
 MAX_OVERLAP_ATTEMPTS = _S.max_overlap_attempts
 TO_BORDER = float(_S.to_border)             # 边界安全距离
 NUM_ROUNDS = _S.num_rounds
+TARGET_REPEAT = max(1, int(_S.get("target_repeat", 1)))  # 每个目标每 epoch 复用次数（少图场景放大数据量）
 JPEG_QUALITY = int(_S.get("jpeg_quality", 95))
 
 # 增强菜单（from config.yaml synth.aug；校准 profile 已由 config.py 合并）
@@ -425,7 +426,7 @@ def place_target(base, target_tuple, placed_bboxes):
 
 def process_round(round_num, target_images, used_targets, bg_paths):
     """处理单轮生成"""
-    if all(used_targets):
+    if all(u >= TARGET_REPEAT for u in used_targets):
         return
 
     real_path = random.choice(bg_paths)
@@ -441,7 +442,8 @@ def process_round(round_num, target_images, used_targets, bg_paths):
     target_count = 0 if random.random() < BACKGROUND_RATIO else NUM_TARGETS_PER_IMAGE
 
     for _ in range(target_count):
-        available_targets = [t for t in target_images if not used_targets[t[2]]]
+        # 可用池：本 epoch 选中次数未达 target_repeat 的目标（计数消耗制）
+        available_targets = [t for t in target_images if used_targets[t[2]] < TARGET_REPEAT]
         if not available_targets:
             break
 
@@ -514,7 +516,7 @@ def process_round(round_num, target_images, used_targets, bg_paths):
                 "width": x_max - x_min,
                 "height": y_max - y_min,
             })
-            used_targets[pixel_bbox["original_idx"]] = True
+            used_targets[pixel_bbox["original_idx"]] += 1
             failed_attempts = 0
         else:
             failed_attempts += 1
@@ -556,12 +558,12 @@ def one_epoch():
         print("错误：没有加载到任何靶标图片，请先生成目标图")
         return
 
-    print(f"背景图: {len(bg_paths)} 张, 靶标: {len(target_images)} 个")
-    used_targets = [False] * len(target_images)
+    print(f"背景图: {len(bg_paths)} 张, 靶标: {len(target_images)} 个 (repeat={TARGET_REPEAT})")
+    used_targets = [0] * len(target_images)
 
     for round_num in tqdm(range(NUM_ROUNDS), desc=f"Epoch :{epoch + 1}",
                           total=NUM_ROUNDS, dynamic_ncols=True, miniters=1):
-        if all(used_targets):
+        if all(u >= TARGET_REPEAT for u in used_targets):
             print(f"Round {round_num}: 所有目标已用完，停止该轮处理")
             break
         process_round(round_num, target_images, used_targets, bg_paths)

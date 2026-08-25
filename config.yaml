@@ -28,6 +28,8 @@ synth:
   num_rounds: 3000                 # 单 epoch 图数上限：目标池用完即提前停止，调大不会多产（≥容量即可）
   epochs: 50                       # 数据量开关：每 epoch 清空目标池重复增强一遍；总图数≈epochs×单epoch产出（单 epoch≈目标数/每图平均贴数）
   num_targets_per_image: 8         # 每张图最多贴几个目标
+  target_repeat: 1                 # 每个目标每 epoch 复用次数。单/少图实例模式（每类只有一张/几张）时调大
+                                   # 直接放大数据量：如 1 类 1 图、每图贴 3 个 → repeat 20 ≈ 单 epoch 产出 7 张
   background_ratio: 0.1            # 空镜负样本比例：该比例的图不贴目标、标签为空（降低误检；0=关闭）
   min_crop_ratio: 0.4              # 背景随机裁剪最小比例
   max_crop_ratio: 0.9              # 背景随机裁剪最大比例

@@ -76,6 +76,10 @@ python yolo/y8train.py            # 6. 训练 → paths.yolo_runs
 
 ### 7. 注意点
 
+- **少图实例模式**：识别特定物体（实例即类，如"场地上的那个橙子/球门"）且每类只有 1~几张目标图时，
+  用 `synth.target_repeat`（每目标每 epoch 复用 N 次）直接放大数据量：
+  单 epoch 产出 ≈ `repeat × 目标数 ÷ 每图贴入数`；再配合放宽 `scale`/`rotate`、降低 `num_targets_per_image`
+  让每张图聚焦少数目标。
 - **先验证再放量**：数据量开关是 **`synth.epochs`**（每 epoch 扫一遍全目标池；总图数 ≈ epochs × 单 epoch 产出）。
   `synth.num_rounds` 只是单 epoch 的图数**上限**（目标池用完即停），调大它不会多产、保持默认即可。
   验证阶段把 epochs 调到 1~2，跑完用 `partial_check.py` 确认标注框正确，再把 epochs 加到想要的数据量。
