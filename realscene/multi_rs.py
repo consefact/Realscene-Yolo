@@ -209,6 +209,14 @@ def apply_aug_menu(img, menu_def):
     return img
 
 
+def _alpha_bbox(alpha):
+    """alpha>0 的真实内容包围盒 (x1,y1,x2,y2)。全透明返回 None。"""
+    ys, xs = np.where(alpha > 0)
+    if len(xs) == 0:
+        return None
+    return (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+
+
 def _build_edge_feather_alpha(w, h, radius):
     """边缘羽化 alpha：离边缘 radius 内线性渐变（抠图硬边 → 柔和）。"""
     if radius <= 0:
@@ -233,10 +241,10 @@ def _crop_transparent(img, room=0):
 
 
 def _rotate_rgba(img, angle):
-    """旋转 RGBA（RGB 双线性、alpha 邻近），返回 (旋转后图, expand 画布内紧致 bbox 或 None)。
-    bbox 为 (x1,y1,x2,y2)，相对 expand 画布。"""
+    """旋转 RGBA（RGB 双线性、alpha 邻近），返回 (旋转后图, 紧致 bbox 或 None)。
+    紧框 = 旋转后 alpha>0 的真实内容包围盒（透明圆角/不规则底图也贴边）。"""
     if abs(angle) < 0.01:
-        return img, None
+        return img, _alpha_bbox(img[:, :, 3])
     h, w = img.shape[:2]
     cos_a, sin_a = abs(np.cos(np.radians(angle))), abs(np.sin(np.radians(angle)))
     # 消除 cos(90°)≈6e-17 类浮点误差：接近整值(0/1)时钳位
@@ -251,13 +259,8 @@ def _rotate_rgba(img, angle):
     m[1, 2] += (max_h - h) / 2.0
     rgb = cv2.warpAffine(img[:, :, :3], m, (max_w, max_h), flags=cv2.INTER_LINEAR, borderValue=0)
     alpha = cv2.warpAffine(img[:, :, 3], m, (max_w, max_h), flags=cv2.INTER_NEAREST, borderValue=0)
-    # 紧致 bbox：原图四角经过旋转+平移后取轴对齐（定义域为 expand 画布）
-    pts = np.float32([[0, 0, 1], [w, 0, 1], [w, h, 1], [0, h, 1]]).reshape(-1, 3)
-    rot = pts @ m.T
-    x1, y1 = int(np.floor(rot[:, 0].min())), int(np.floor(rot[:, 1].min()))
-    x2, y2 = int(np.ceil(rot[:, 0].max())), int(np.ceil(rot[:, 1].max()))
-    x1 = max(0, x1); y1 = max(0, y1); x2 = min(max_w, x2); y2 = min(max_h, y2)
-    return np.dstack([rgb, alpha]), (x1, y1, x2, y2)
+    # 紧框：以 alpha 内容为准（而非整图四角——那必然等于 expand 画布）
+    return np.dstack([rgb, alpha]), _alpha_bbox(alpha)
 
 
 def random_crop(image_path):
