@@ -1,5 +1,5 @@
 # 本文件由 y8train.py 依据 config.yaml 自动生成，请勿手改
-path: /home/airhust/consefact/Realscene-Yolo/delivery/HDATASET
+path: /home/airhust/consefact/Realscene-Yolo/delivery-3/HDATASET
 train: train/images
 val: val/images
 nc: 7

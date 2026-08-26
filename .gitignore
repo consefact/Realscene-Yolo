@@ -35,7 +35,7 @@ __pycache__/
 
 # Inference outputs
 /predict_out/
-/yolo/dataset_ft.yaml
+/yolo/dataset*.yaml
 
 # Calibration profiles (regenerated per task)
 /profiles/
