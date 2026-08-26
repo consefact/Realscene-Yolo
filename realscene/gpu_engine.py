@@ -282,10 +282,12 @@ def _rotation_matrix(w, h, angle, max_w, max_h):
 
 
 def _warp_rgba_tensor(rgb, alpha, hm, out_h, out_w):
-    """cv2.warpPerspective 等价：hm 为正向（src→dst）3x3（与 cv2 同参数语义实现一致）。
+    """cv2.warpPerspective 等价：hm 为**正向（src→dst）**3x3，内部用 inv(H) 采样
+    （实测方向修正：直接用 H 会在所有 device 上产生反向/放大的错误贴图）。
     rgb [1,3,H,W]、alpha [1,1,H,W] float [0,255]；grid_sample align_corners=False。"""
     # 输出网格像素坐标 → 采样源坐标（正向 hm，与 cv2.warpPerspective 的 M 语义一致）
-    m = torch.tensor(hm, dtype=torch.float32, device=rgb.device)
+    hm_inv = np.linalg.inv(hm)                        # 采样矩阵 = H⁻¹（方向修正）
+    m = torch.tensor(hm_inv, dtype=torch.float32, device=rgb.device)
     px = (torch.linspace(0, rgb.shape[-1] - 1, out_w, device=rgb.device)
           * (out_w - 1) / max(1, rgb.shape[-1] - 1))
     py = (torch.linspace(0, rgb.shape[-2] - 1, out_h, device=rgb.device)
