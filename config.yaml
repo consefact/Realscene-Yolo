@@ -13,10 +13,10 @@ classes: [house, tent, tank, car, bridge, cross, H]
 # 路径（相对项目根；也可写绝对路径）
 # ---------------------------------------------------------------------------
 paths:
-  backgrounds:  ./delivery-2/backgrounds      # 背景图目录（realscene 的底图）
-  synth_output: ./delivery-2/train_output     # realscene/multi_rs 合成结果（图+标注）
-  dataset:      ./delivery-2/HDATASET         # organize 输出 / 训练数据集根
-  check_output: ./delivery-2/check_samples    # 可视化检查输出
+  backgrounds:  ./delivery-3/backgrounds      # 背景图目录（realscene 的底图）
+  synth_output: ./delivery-3/train_output     # realscene/multi_rs 合成结果（图+标注）
+  dataset:      ./delivery-3/HDATASET         # organize 输出 / 训练数据集根
+  check_output: ./delivery-3/check_samples    # 可视化检查输出
   yolo_runs:    ./yolo_run               # 训练 project 目录
   base_weights: yolo26n.pt               # 训练起始权重
 
@@ -25,16 +25,16 @@ paths:
 # ---------------------------------------------------------------------------
 synth:
   base_size: [640, 480]            # 输出图尺寸（YOLO 训练尺寸）
-  num_rounds: 3000                 # 生成轮数（先小规模验证，再放量）
-  epochs: 50                       # 总轮数（每 epoch 复用一遍全部目标крп；数据量≈epochs×每轮图数）
-  num_targets_per_image: 8         # 每张图最多贴几个目标
-  target_repeat: 1                 # 每个目标每 epoch 复用次数。单/少图实例模式（每类只有一张/几张）时调大
+  num_rounds: 100                 # 生成轮数
+  epochs: 100                       # 总轮数（每 epoch 复用一遍全部目标крп；数据量≈epochs×每轮图数）（先小规模验证，再放量）
+  num_targets_per_image: 5         # 每张图最多贴几个目标
+  target_repeat: 30                 # 每个目标每 epoch 复用次数。单/少图实例模式（每类只有一张/几张）时调大
                                    # 直接放大数据量：如 1 类 1 图、每图贴 3 个 → repeat 20 ≈ 单 epoch 产出 7 张
-  background_ratio: 0.1            # 空镜负样本比例：该比例的图不贴目标、标签为空（降低误检；0=关闭）
+  background_ratio: 0.05            # 空镜负样本比例：该比例的图不贴目标、标签为空（降低误检；0=关闭）
   min_crop_ratio: 0.4              # 背景随机裁剪最小比例
   max_crop_ratio: 0.9              # 背景随机裁剪最大比例
-  min_target_ratio: 0.2            # 目标占画布最小比例
-  max_target_ratio: 0.6            # 目标占画布最大比例
+  min_target_ratio: 0.1            # 目标占画布最小比例
+  max_target_ratio: 0.65            # 目标占画布最大比例
   max_target_failure: 8            # 单图放置失败上限
   max_overlap_attempts: 20         # 单目标找不重叠位置的尝试上限
   to_border: 1.0e-6                # 归一化坐标的边界安全距离
@@ -77,10 +77,10 @@ synth:
   # 可配置多个类型，realscene 会全部加载并混合使用。
   target_types:
     objects:
-      dir: ./delivery-2/target           # 目标样例目录，按类分子目录（子目录名=classes）
+      dir: ./delivery-3/target           # 目标样例目录，按类分子目录（子目录名=classes）
       roi: null                      # 整图即目标；若目标是底板只想框内部，改成 [rx,ry,rw,rh]
-      scale: [0.5, 1.0]             # 目标初始缩放范围
-      rotate: [-45, 45]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
+      scale: [0.3, 1.2]             # 目标初始缩放范围
+      rotate: [-180, 180]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
       feather: 4                     # 边缘羽化半径(px)（消灭抠图硬边；0=关闭）
       crop_transparent: true         # 贴入前裁掉 alpha=0 的透明边距（紧框更准）
     # ---- 底板 + ROI 示例（复现原 CIFAR 版的 34/32 内缩，可按需启用）----
@@ -118,19 +118,19 @@ train:
   patience: 60
   optimizer: MuSGD               # YOLO26的官方指定优化器，结合了SGD和Muon的优点，效果出色
   lr0: 0.001
-  run_name: delivery-2            # 训练结果子目录名（yolo_runs/<run_name>）
+  run_name: delivery-3            # 训练结果子目录名（yolo_runs/<run_name>）
 
 # ---------------------------------------------------------------------------
 # 微调（finetune.py：从 best.pt 出发，混入实拍标注数据继续训，避免灾难性遗忘）
 # 前置：实拍图需已标注（可先用 quick_test.py --save-labels 预标注再人工纠正）
 # ---------------------------------------------------------------------------
 finetune:
-  real_dir: ./delivery-2/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
+  real_dir: ./delivery-3/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
   oversample: 5                    # 实拍图在训练集里的重复倍数（少量真实数据加权）
   epochs: 200
   lr0: 0.001                       # 小学习率，避免冲垮预训练权重
   freeze: 0                        # 冻结前 N 层（0=不冻结；实拍很少可试 10）
-  run_name: delivery-2_ft         # 微调输出子目录（不覆盖原 best.pt）
+  run_name: delivery-3_ft         # 微调输出子目录（不覆盖原 best.pt）
 
 # ---------------------------------------------------------------------------
 # 采集（run.py 自动连拍 / manual_shot.py 手动拍）
