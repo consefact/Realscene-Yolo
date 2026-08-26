@@ -313,6 +313,31 @@ def _alpha_bbox_gpu(alpha):
     return (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
 
 
+def _alpha_bboxes_batch(alpha_batch):
+    """alpha_batch [N,H,W] 或 [N,1,H,W] → list[bbox|None]。全 GPU 向量化，仅一次 .cpu() 同步。"""
+    a = alpha_batch[:, 0] if alpha_batch.dim() == 4 else alpha_batch
+    n, h, w = a.shape
+    m = a > 0
+    xany = m.any(dim=1)                       # [N,W]
+    yany = m.any(dim=2)                       # [N,H]
+    xx = torch.arange(w, device=a.device).float()
+    yy = torch.arange(h, device=a.device).float()
+    xmin = torch.where(xany, xx[None, :], torch.tensor(1e9, device=a.device)).min(dim=1)[0]
+    xmax = torch.where(xany, xx[None, :], torch.tensor(-1e9, device=a.device)).max(dim=1)[0]
+    ymin = torch.where(yany, yy[None, :], torch.tensor(1e9, device=a.device)).min(dim=1)[0]
+    ymax = torch.where(yany, yy[None, :], torch.tensor(-1e9, device=a.device)).max(dim=1)[0]
+    has = m.any(dim=(1, 2)).cpu().numpy()
+    xmin_n = xmin.cpu().numpy(); xmax_n = xmax.cpu().numpy()
+    ymin_n = ymin.cpu().numpy(); ymax_n = ymax.cpu().numpy()
+    out = []
+    for i in range(n):
+        if not has[i]:
+            out.append(None)
+        else:
+            out.append((int(xmin_n[i]), int(ymin_n[i]), int(xmax_n[i]) + 1, int(ymax_n[i]) + 1))
+    return out
+
+
 def _feather_alpha_tensor(h, w, radius, device):
     """复刻 _build_edge_feather_alpha（radius<=0 → 全 255）。"""
     if radius <= 0:
@@ -553,20 +578,16 @@ class BatchSynthesizer:
         hm_full = s_mat @ hm
         rgb_o, al_o = _warp_rgba_tensor(img[:, :3].contiguous(), img[:, 3:4].contiguous(),
                                         hm_full, fh, fw)
-        tight = _alpha_bbox_gpu(al_o[:, 0])
-        if tight:
-            # 紧框原为"expand 画布坐标"，应对应到 final 坐标：alpha bbox 已在 final 画布上（直接可用）
-            pass
-        return rgb_o, al_o, tight, fw, fh
+        # tight 延后到整图尾部批计算（消除逐 slot CPU 同步）
+        return rgb_o, al_o, None, fw, fh
 
-    def _finalize_slot(self, img_tensor, rgb_o, al_o, tight, ttype, cid, placed_bboxes,
-                       w=None, h=None):
-        """放置拒绝 + GPU paste（warp 已含比例缩放）。返回 (label or None, 是否成功)。"""
+    def _place_paste(self, img_tensor, rgb_o, al_o, ttype, placed_bboxes, w=None, h=None):
+        """放置拒绝 + GPU paste（warp 已含比例缩放）。返回 (rec or None, 是否成功)。
+        rec = {"x","y","w","h","cid","ttype"} —— 标签延后到整图尾部批 bbox 后组装。"""
         W, H = self.sc["BASE_SIZE"]
         tw, th = w, h
         if tw > W or th > H:
             return None, False
-        x = y = None
         for _ in range(self.sc["MAX_OVERLAP_ATTEMPTS"] * 2):
             x = random.randint(0, W - tw)
             y = random.randint(0, H - th)
@@ -587,19 +608,23 @@ class BatchSynthesizer:
         a = al_o[:, 0]
         if feather > 0:
             a = a * _feather_alpha_tensor(th, tw, feather, a.device).squeeze(0)
-        a = (a / 255.0).clamp(0, 1).unsqueeze(0)      # (1,nh,nw)
+        a = (a / 255.0).clamp(0, 1).unsqueeze(0)
         src = rgb_o[0]
         reg = img_tensor[0, :, y:y + th, x:x + tw]
         blended = a * src + (1.0 - a) * reg
         img_tensor[0, :, y:y + th, x:x + tw] = blended
-        # bbox/label
+        placed_bboxes.append({"x": x, "y": y, "width": tw, "height": th})
+        return {"x": x, "y": y, "w": tw, "h": th}, True
+
+    def _make_label(self, rec, tight, ttype, cid):
+        """从 rec + tight（warp 画布内 alpha bbox）组装 YOLO 行（ROI/归一化/TO_BORDER 同 CPU 版）。"""
+        W, H = self.sc["BASE_SIZE"]
         if tight:
             bx1, by1, bx2, by2 = tight
-            bx, by, bw, bh = x + bx1, y + by1, bx2 - bx1, by2 - by1
+            bx, by, bw, bh = rec["x"] + bx1, rec["y"] + by1, bx2 - bx1, by2 - by1
         else:
-            bx, by, bw, bh = x, y, tw, th
+            bx, by, bw, bh = rec["x"], rec["y"], rec["w"], rec["h"]
         roi = self.sc["TARGET_ROI"].get(ttype)
-        placed_bboxes.append({"x": bx, "y": by, "width": bw, "height": bh})
         if roi:
             rx, ry, rw, rh = roi
             abs_x, abs_y = bx + rx * bw, by + ry * bh
@@ -608,14 +633,12 @@ class BatchSynthesizer:
             abs_x, abs_y, abs_w, abs_h = bx, by, bw, bh
         xc = (abs_x + abs_w / 2) / W
         yc = (abs_y + abs_h / 2) / H
-        wn = abs_w / W
-        hn = abs_h / H
+        wn = abs_w / W; hn = abs_h / H
         tb = self.sc["TO_BORDER"]
         x_min = max(0.0 + tb, xc - wn / 2); x_max = min(1.0 - tb, xc + wn / 2)
         y_min = max(0.0 + tb, yc - hn / 2); y_max = min(1.0 - tb, yc + hn / 2)
-        label = f"{cid} {(x_min + x_max) / 2:.6f} {(y_min + y_max) / 2:.6f} " \
-                f"{x_max - x_min:.6f} {y_max - y_min:.6f}"
-        return label, True
+        return f"{cid} {(x_min + x_max) / 2:.6f} {(y_min + y_max) / 2:.6f} " \
+               f"{x_max - x_min:.6f} {y_max - y_min:.6f}"
 
     def compose_plan(self, bg_tensor, plan, used_targets, epoch):
         """单图完整合成：返回 (image_tensor[1,3,H,W], labels[list[str]])。"""
@@ -625,6 +648,7 @@ class BatchSynthesizer:
         self._sample_target_slots(plan, used_targets)
         placed = []
         img = bg_tensor          # 约定输入 (1,3,H,W)
+        retained = []            # (al_o, rec, cid, ttype)
         for slot in plan["slots"]:
             out = self._warp_slot(slot)
             if out is None:
@@ -633,16 +657,25 @@ class BatchSynthesizer:
                     break
                 continue
             rgb_o, al_o, tight, w, h = out
-            lab, ok = self._finalize_slot(img, rgb_o, al_o, tight, slot["ttype"],
-                                          slot["cid"], placed, w, h)
+            rec, ok = self._place_paste(img, rgb_o, al_o, slot["ttype"], placed, w, h)
             if ok:
-                labels.append(lab)
+                retained.append((al_o, rec, slot["cid"], slot["ttype"]))
                 used_targets[slot["t"]] += 1
                 plan["failed"] = 0
             else:
                 plan["failed"] = plan.get("failed", 0) + 1
                 if plan["failed"] >= self.sc["MAX_TARGET_FAILURE"]:
                     break
+        # 整图尾部：一次批 bbox（单次 GPU→CPU 同步）→ 组装标签
+        if retained:
+            maxh = max(int(a.shape[2]) for a, *_ in retained)
+            maxw = max(int(a.shape[3]) for a, *_ in retained)
+            stack = torch.cat([F.pad(a[0], (0, maxw - a.shape[3], 0, maxh - a.shape[2]), value=0)
+                               for a, *_ in retained])
+            bboxes = _alpha_bboxes_batch(stack)
+            for (a_o, rec, cid, ttype), bbs in zip(retained, bboxes):
+                # a 在 pad 后的坐标系：bbs 减 pad 偏移无影响（right/bottom pad：min 不变）
+                labels.append(self._make_label(rec, bbs, ttype, cid))
         return img, labels
 
     def _apply_final_menu(self, images, plans):
