@@ -34,6 +34,7 @@ TO_BORDER = float(_S.to_border)             # 边界安全距离
 NUM_ROUNDS = _S.num_rounds
 TARGET_REPEAT = max(1, int(_S.get("target_repeat", 1)))  # 每个目标每 epoch 复用次数（少图场景放大数据量）
 JPEG_QUALITY = int(_S.get("jpeg_quality", 95))
+TARGET_REPEAT = max(1, int(_S.get("target_repeat", 1)))  # 每目标每 epoch 复用次数（少图实例模式放大数据量）
 
 # 增强菜单（from config.yaml synth.aug；校准 profile 已由 config.py 合并）
 AUG_MENUS = dict(_S.get("aug", {}))
@@ -46,6 +47,9 @@ TARGET_ROI = {t: (list(spec["roi"]) if spec.get("roi") else None)
               for t, spec in TARGET_TYPES.items()}
 TARGET_SCALE = {t: tuple(spec.get("scale", [0.5, 1.0])) for t, spec in TARGET_TYPES.items()}
 TARGET_ROTATE = {t: tuple(spec.get("rotate", [-45, 45])) for t, spec in TARGET_TYPES.items()}
+# 透视形变 [prob, distortion]：概率触发、四角扰动 ±distortion*min(w,h)；null=关闭
+TARGET_PERSPECTIVE = {t: (tuple(spec["perspective"]) if spec.get("perspective") else None)
+                      for t, spec in TARGET_TYPES.items()}
 TARGET_FEATHER = {t: int(spec.get("feather", 0)) for t, spec in TARGET_TYPES.items()}
 TARGET_CROP_TRANSPARENT = {t: bool(spec.get("crop_transparent", True)) for t, spec in TARGET_TYPES.items()}
 
@@ -101,6 +105,20 @@ def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5)):
         y = random.randint(0, max(0, h - size))
         out[y:y + size, x:x + size] = np.random.randint(0, 256, (size, size, 3), dtype=np.uint8)
     return out
+
+
+def aug_perspective(img, distortion=0.1):
+    """目标透视形变（模拟相机畸变/倾斜视角）：四角独立随机扰动 → PerspectiveTransform。
+    RGBA（alpha 邻近插值、透明 borderValue）；紧框由后续 alpha bbox 自动贴合。"""
+    h, w = img.shape[:2]
+    d = distortion * min(w, h)
+    r = lambda: random.uniform(-d, d)
+    src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+    dst = np.float32([[r(), r()], [w + r(), r()], [w + r(), h + r()], [r(), h + r()]])
+    m = cv2.getPerspectiveTransform(src, dst)
+    rgb = cv2.warpPerspective(img[:, :, :3], m, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
+    alpha = cv2.warpPerspective(img[:, :, 3], m, (w, h), flags=cv2.INTER_NEAREST, borderValue=0)
+    return np.dstack([rgb, alpha])
 
 
 def aug_geometric(img, distortion=0.1):
@@ -358,6 +376,11 @@ def apply_augmentation(target_tuple):
     img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
     img = apply_aug_menu(img, AUG_MENUS.get("target", {"menu": []}))
+
+    # 透视形变（相机畸变/倾斜视角）：在旋转前施加；紧框由后续 alpha bbox 自动贴合
+    perv = TARGET_PERSPECTIVE.get(target_type)
+    if perv and random.random() < perv[0]:
+        img = aug_perspective(img, perv[1])
 
     rot_lo, rot_hi = TARGET_ROTATE.get(target_type, (-45, 45))
     angle = round(random.uniform(rot_lo, rot_hi), 1)
