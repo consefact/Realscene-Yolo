@@ -39,6 +39,9 @@ synth:
   max_overlap_attempts: 20         # 单目标找不重叠位置的尝试上限
   to_border: 1.0e-6                # 归一化坐标的边界安全距离
   jpeg_quality: 95                 # 合成图输出 JPEG 质量
+  backend: gpu                     # gpu（单进程批量张量）| cpu（realscene/multi_rs）| auto（有CUDA则gpu）
+  gpu_batch: 32                    # GPU 引擎每批合成图数（显存/吞吐折中；4000 系建议 32-64）
+  gpu_jpeg_workers: 4              # GPU 引擎 JPEG 保存线程数
   num_workers: 1                   # 1 → 用 realscene.py（单进程）；>1 → 用 multi_rs.py（多进程）
   profile: null                    # 可选：校准工具生成的增强覆盖 YAML（tools/calibrate_augment_profile.py），
                                    # 加载时与下面的 aug 段深合并（相对项目根）

@@ -85,3 +85,19 @@ python yolo/y8train.py            # 6. 训练 → paths.yolo_runs
   验证阶段把 epochs 调到 1~2，跑完用 `partial_check.py` 确认标注框正确，再把 epochs 加到想要的数据量。
 - 开启 `synth.apply_geometric_aug` 等几何增强可能让识别框与目标出现细微偏移。
 - 背景图的多样性直接决定模型泛化能力——实际会在什么背景上出现，就拍什么背景。
+
+### 8. GPU 批量合成引擎（大规模数据）
+
+数据量需求大（万~十万级）时用单进程批量 GPU 引擎（替代多进程 multi_rs，无 pool 卡死面）：
+
+```bash
+python realscene/gpu_synth.py --backend gpu          # 或 config synth.backend: auto
+python realscene/gpu_synth.py --backend gpu --epochs 20 --batch 32 --jpeg-workers 8
+```
+
+- `synth.backend: gpu|auto|cpu`（auto：有 CUDA 则 gpu 否则 cpu）；`gpu_batch`（每批图数，32-64）；
+  `gpu_jpeg_workers`（JPEG 保存线程数）。
+- 语义与 `realscene.py` 全一致（目标池/repeat/空镜/紧框/ROI/羽化/透视/增强菜单）；像素批量张量化，
+  随机采样/放置/标注保留 CPU（同 seed 同进程复现，跨进程 final 噪声层存在轻微进程级差异，分布无偏）。
+- 数据量旋钮不变：`target_repeat × num_rounds × epochs`（如 500×20=1 万张/epoch×20）。
+- 实测（5070Ti）：30–88 img/s；服务器 4090 预计 2-3×。未装 CUDA 时自动回退 CPU 后端。
