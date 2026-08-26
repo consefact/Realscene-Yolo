@@ -284,7 +284,11 @@ def _rotation_matrix(w, h, angle, max_w, max_h):
 def _warp_rgba_tensor(rgb, alpha, hm, out_h, out_w):
     """cv2.warpPerspective 等价：hm 为**正向（src→dst）**3x3，内部用 inv(H) 采样
     （实测方向修正：直接用 H 会在所有 device 上产生反向/放大的错误贴图）。
-    rgb [1,3,H,W]、alpha [1,1,H,W] float [0,255]；grid_sample align_corners=False。"""
+    CPU 后端走 **cv2 路径**（与 realscene.py 同款实现，兼容 torch 2.4.x 的
+    grid_sample 差异——服务器 CPU 版本曾出现目标残缺）；GPU 用 grid_sample。
+    rgb [1,3,H,W]、alpha [1,1,H,W] float [0,255]。"""
+    if rgb.device.type == "cpu":
+        return _warp_rgba_cv(rgb, alpha, hm, out_h, out_w)
     # 输出网格像素坐标 → 采样源坐标（正向 hm，与 cv2.warpPerspective 的 M 语义一致）
     hm_inv = np.linalg.inv(hm)                        # 采样矩阵 = H⁻¹（方向修正）
     m = torch.tensor(hm_inv, dtype=torch.float32, device=rgb.device)
@@ -304,6 +308,19 @@ def _warp_rgba_tensor(rgb, alpha, hm, out_h, out_w):
     rgb_o = F.grid_sample(rgb, sx_n, mode="bilinear", padding_mode="zeros", align_corners=False)
     a_o = F.grid_sample(alpha, sx_n, mode="nearest", padding_mode="zeros", align_corners=False)
     return rgb_o, a_o
+
+
+def _warp_rgba_cv(rgb, alpha, hm, out_h, out_w):
+    """CPU 版 warp：cv2.warpPerspective（H 为正向 src→dst；RGB 双线性、alpha 最近邻）。"""
+    rgb8 = rgb[0].permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy()
+    a8 = alpha[0, 0].clamp(0, 255).byte().cpu().numpy()
+    rgb_o = cv2.warpPerspective(rgb8, hm, (out_w, out_h),
+                                flags=cv2.INTER_LINEAR, borderValue=(0, 0, 0))
+    a_o = cv2.warpPerspective(a8, hm, (out_w, out_h),
+                              flags=cv2.INTER_NEAREST, borderValue=0)
+    rgb_t = torch.from_numpy(rgb_o).permute(2, 0, 1).float().unsqueeze(0)
+    a_t = torch.from_numpy(a_o).float().unsqueeze(0).unsqueeze(0)
+    return rgb_t.to(rgb.device), a_t.to(rgb.device)
 
 
 def _alpha_bbox_gpu(alpha):
