@@ -53,6 +53,8 @@ def extract_synth_cfg(cfg):
         "BACKEND": _S.get("backend", "cpu"),
         "GPU_BATCH": int(_S.get("gpu_batch", 32)),
         "JPEG_WORKERS": int(_S.get("gpu_jpeg_workers", 4)),
+        # torch<2.5 的 grid_sample 存在边界裁剪残缺：true=warp 走 cv2(CPU, 稳定/版本无关)
+        "GPU_WARP_CV": bool(_S.get("gpu_warp_cv", True)),
     }
     tt = out["TARGET_TYPES"]
     out["TARGET_ROI"] = {t: (list(s["roi"]) if s.get("roi") else None) for t, s in tt.items()}
@@ -301,10 +303,10 @@ def _warp_rgba_tensor(rgb, alpha, hm, out_h, out_w):
     src_pts = grid @ m.T
     wx = src_pts[:, 2].clamp(min=1e-8)
     sx = (src_pts[:, :2] / wx.unsqueeze(1)).reshape(1, out_h, out_w, 2).contiguous()
-    # grid_sample 归一化帧（源尺寸 >1 时 2x-1）
+    # grid_sample 归一化帧（源尺寸 >1 时 2x-1）；越界采样 clamp+epsilon（消除 expand 舍入的 1px 切口）
     sx_n = sx.clone()
-    sx_n[..., 0] = sx[..., 0] * 2.0 / (rgb.shape[-1] - 1) - 1.0
-    sx_n[..., 1] = sx[..., 1] * 2.0 / (rgb.shape[-2] - 1) - 1.0
+    sx_n[..., 0] = (sx[..., 0] * 2.0 / (rgb.shape[-1] - 1) - 1.0).clamp(-1.0, 1.0)
+    sx_n[..., 1] = (sx[..., 1] * 2.0 / (rgb.shape[-2] - 1) - 1.0).clamp(-1.0, 1.0)
     rgb_o = F.grid_sample(rgb, sx_n, mode="bilinear", padding_mode="zeros", align_corners=False)
     a_o = F.grid_sample(alpha, sx_n, mode="nearest", padding_mode="zeros", align_corners=False)
     return rgb_o, a_o
@@ -595,8 +597,12 @@ class BatchSynthesizer:
         # 折叠：S ∘ (旋转∘透视)，一次采样到最终尺寸
         s_mat = np.diag([fw / max_w, fh / max_h, 1.0])
         hm_full = s_mat @ hm
-        rgb_o, al_o = _warp_rgba_tensor(img[:, :3].contiguous(), img[:, 3:4].contiguous(),
+        if self.sc.get("GPU_WARP_CV", True):
+            rgb_o, al_o = _warp_rgba_cv(img[:, :3].contiguous(), img[:, 3:4].contiguous(),
                                         hm_full, fh, fw)
+        else:
+            rgb_o, al_o = _warp_rgba_tensor(img[:, :3].contiguous(), img[:, 3:4].contiguous(),
+                                            hm_full, fh, fw)
         # tight 延后到整图尾部批计算（消除逐 slot CPU 同步）
         return rgb_o, al_o, None, fw, fh
 
