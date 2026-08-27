@@ -303,10 +303,13 @@ def _warp_rgba_tensor(rgb, alpha, hm, out_h, out_w):
     src_pts = grid @ m.T
     wx = src_pts[:, 2].clamp(min=1e-8)
     sx = (src_pts[:, :2] / wx.unsqueeze(1)).reshape(1, out_h, out_w, 2).contiguous()
-    # grid_sample 归一化帧（源尺寸 >1 时 2x-1）；越界采样 clamp+epsilon（消除 expand 舍入的 1px 切口）
+    # 归一化到 grid_sample 帧（源尺寸 >1 时 2x-1）。
+    # 严禁 clamp 到 [-1,1]: 越界坐标被 grid_sample 按 padding=zeros 采 0（=透明），
+    # 若 clamp 回 1.0 会"拽回边界采样",把本应透明的区域变成边界像素的拉丝/拖尾
+    # （diag_warp --gpu 实测: 多出 15204 px, bbox 撑满画布）。
     sx_n = sx.clone()
-    sx_n[..., 0] = (sx[..., 0] * 2.0 / (rgb.shape[-1] - 1) - 1.0).clamp(-1.0, 1.0)
-    sx_n[..., 1] = (sx[..., 1] * 2.0 / (rgb.shape[-2] - 1) - 1.0).clamp(-1.0, 1.0)
+    sx_n[..., 0] = sx[..., 0] * 2.0 / (rgb.shape[-1] - 1) - 1.0
+    sx_n[..., 1] = sx[..., 1] * 2.0 / (rgb.shape[-2] - 1) - 1.0
     rgb_o = F.grid_sample(rgb, sx_n, mode="bilinear", padding_mode="zeros", align_corners=False)
     a_o = F.grid_sample(alpha, sx_n, mode="nearest", padding_mode="zeros", align_corners=False)
     return rgb_o, a_o
