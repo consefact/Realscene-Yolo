@@ -555,7 +555,9 @@ class BatchSynthesizer:
             if perv and random.random() < perv[0]:
                 # 以 s_init 缩放后的 (nw,nh) 为基准（与 _warp_slot 中图像 resize 后一致），
                 # 偏移幅度也在新尺度上取，避免透视作用于错误尺度导致强度/裁剪异常。
-                nw0, nh0 = max(1, int(img.shape[3] * s_init)), max(1, int(img.shape[2] * s_init))
+                # 注意 img 此处为 numpy (H,W,4)，用 shape[:2]（_warp_slot 内是 tensor 才用 [2]/[3]）。
+                h0, w0 = img.shape[:2]
+                nw0, nh0 = max(1, int(w0 * s_init)), max(1, int(h0 * s_init))
                 d = perv[1] * min(nw0, nh0)
                 r = lambda: random.uniform(-d, d)
                 src = np.float32([[0, 0], [nw0, 0], [nw0, nh0], [0, nh0]])
