@@ -41,9 +41,13 @@ def main():
     for k, v in info.items():
         print(f"  {k}: {v}")
 
+    epochs = args.epochs if args.epochs is not None else sc["EPOCHS"]
     if args.epochs is None:
-        return  # P0：仅加载校验
-    eng.run(args.epochs)
+        print(f"（未指定 --epochs，使用 config 的 {epochs}；显式传 --epochs 可覆盖）")
+    if len(eng.target_images_np) <= len(sc["CLASSES"]):
+        print(f"⚠️ 目标每类约 1 张——少图实例模式：调大 synth.target_repeat "
+              f"(当前 {sc['TARGET_REPEAT']}) × synth.num_rounds × epochs 得到目标数据量")
+    eng.run(epochs)
 
 
 if __name__ == "__main__":
