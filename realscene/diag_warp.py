@@ -177,8 +177,10 @@ def main():
         both = m & ref_mask
         rgb_diff = float(np.abs(r.astype(np.int32) - ref_rgb.astype(np.int32))[both].mean()) \
             if both.any() else float("nan")
-        ok = ratio >= 0.85 and bw_ >= 0.9 * rw_ and bh_ >= 0.9 * rh_ \
-            and missing == 0 and extra == 0
+        # 亚像素级(圆边缘插值取舍 <内容0.5%、bbox 差<1px)视为通过;
+        # 真正的残缺/污染(missing 或 extra 大块像素)才标 ⚠
+        ok = (ratio >= 0.995 and bw_ >= rw_ - 1 and bh_ >= rh_ - 1
+              and missing < 0.005 * ref_mask.sum() and extra < 0.005 * ref_mask.sum())
         flag = "✅" if ok else "⚠ 残缺"
         print(f"{name:<7} {ratio:6.3f}  {bw_}x{bh_}(REF {rw_}x{rh_})  {missing:6d}  "
               f"{extra:6d}  RGB差{rgb_diff:5.1f}  {flag}")
