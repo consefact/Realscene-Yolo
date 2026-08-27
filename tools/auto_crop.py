@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from PIL import Image
 import argparse
@@ -20,6 +21,8 @@ def main():
     # 支持的图片扩展名
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
 
+    t0 = time.perf_counter()
+    n_cropped = 0
     for file_path in source_dir.rglob('*'):
         if file_path.suffix.lower() in image_extensions:
             # 计算相对于源目录的相对路径
@@ -33,9 +36,13 @@ def main():
                 with Image.open(file_path) as img:
                     cropped_img = img.crop(crop_box)
                     cropped_img.save(target_file)
-                    print(f"Cropped {file_path} to {target_file}")
+                    n_cropped += 1
             except Exception as e:
                 print(f"Error processing {file_path}: {e}")
+
+    dt = time.perf_counter() - t0
+    rate = n_cropped / dt if dt > 0 else 0.0
+    print(f"完成：裁剪 {n_cropped} 张 → {target_dir}（用时 {dt:.1f}s，{rate:.1f} 张/s）")
 
 if __name__ == '__main__':
     main()

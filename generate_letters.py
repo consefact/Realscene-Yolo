@@ -9,6 +9,7 @@
 import os
 import sys
 import random
+import time
 from PIL import Image, ImageDraw, ImageFont
 
 # --- 载入统一配置 ---
@@ -102,6 +103,7 @@ def pick_font_fit(letter, max_half_diag):
 
 
 def generate():
+    t0 = time.perf_counter()
     for letter in CLASSES:
         out_dir = os.path.join(OUTPUT_DIR, letter)
         os.makedirs(out_dir, exist_ok=True)
@@ -134,7 +136,9 @@ def generate():
 
             img.save(os.path.join(out_dir, f"{style}_{i:04d}.png"))
 
-    print(f"生成完成 → {OUTPUT_DIR}/  (每类 {NUM_PER_CLASS} 张，共 {len(CLASSES)} 类：{CLASSES})")
+    dt = time.perf_counter() - t0
+    print(f"生成完成 → {OUTPUT_DIR}/  (每类 {NUM_PER_CLASS} 张，共 {len(CLASSES)} 类：{CLASSES}；"
+          f"用时 {dt:.1f}s)")
 
 
 if __name__ == "__main__":

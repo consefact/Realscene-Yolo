@@ -30,6 +30,7 @@ import json
 import os
 import random
 import sys
+import time
 from dataclasses import dataclass
 
 import cv2
@@ -416,6 +417,7 @@ def yaml_safe(obj):
 
 
 def main():
+    t0 = time.perf_counter()
     ap = argparse.ArgumentParser(description="根据现场标注图自动标定增强参数")
     ap.add_argument("--mode", choices=["single", "compare"], required=True)
     ap.add_argument("--images_dir", required=True, help="带标注的现场图目录（images/ 或 flat）")
@@ -465,6 +467,7 @@ def main():
     with open(rep_path, "w", encoding="utf-8") as f:
         json.dump(rep, f, ensure_ascii=False, indent=2)
     print(f"report → {rep_path}")
+    print(f"标定完成，总用时 {time.perf_counter() - t0:.1f}s")
 
 
 if __name__ == "__main__":

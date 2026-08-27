@@ -11,6 +11,7 @@
 import os
 import sys
 import json
+import time
 import glob
 import shutil
 import argparse
@@ -38,6 +39,7 @@ def img_size(path, j):
 
 
 def main():
+    t0 = time.perf_counter()
     ap = argparse.ArgumentParser(description="LabelMe/X-AnyLabeling JSON → YOLO txt")
     ap.add_argument("source", help="含 图片 + .json 的目录")
     ap.add_argument("--out", default=CFG.finetune.real_dir, help="输出目录（默认 config.finetune.real_dir）")
@@ -130,6 +132,7 @@ def main():
     print("  每类框数:")
     for c in classes:
         print(f"    {c:10s} {per_class[idx[c]]}")
+    print(f"  总用时 {time.perf_counter() - t0:.1f}s")
     if unknown:
         print("  ⚠️ 未识别的 label（不在 classes 里，已跳过）:", dict(unknown))
         print("     → 请核对 X-AnyLabeling 里的类名与 config.yaml 的 classes 一致")

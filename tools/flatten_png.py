@@ -14,6 +14,7 @@
 import os
 import sys
 import random
+import time
 import argparse
 
 # --- 载入统一配置（相对路径项目根）---
@@ -104,6 +105,7 @@ def main():
         os.path.dirname(src.rstrip(os.sep)), "flat")
     os.makedirs(out_dir, exist_ok=True)
 
+    t0 = time.perf_counter()
     n_ok = n_skip = 0
     for f in files:
         try:
@@ -131,7 +133,10 @@ def main():
         except Exception as e:
             print(f"  ❌ {os.path.basename(f)}: {e}")
 
-    print(f"完成：铺底 {n_ok} 张 → {out_dir}" + (f"（跳过无透明 {n_skip}）" if n_skip else ""))
+    dt = time.perf_counter() - t0
+    rate = n_ok / dt if dt > 0 else 0.0
+    print(f"完成：铺底 {n_ok} 张 → {out_dir}（用时 {dt:.1f}s，{rate:.1f} 张/s）"
+          + (f"，跳过无透明 {n_skip}" if n_skip else ""))
 
 
 if __name__ == "__main__":
