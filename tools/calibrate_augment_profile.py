@@ -397,6 +397,24 @@ def build_profile(stats_list, align_strength=1.0, synth_menu=None, synth_raw=Non
     return profile
 
 
+def yaml_safe(obj):
+    """递归把 numpy 标量/np数组转成 pyyaml 可序列化的原生类型（防 RepresenterError）。"""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: yaml_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [yaml_safe(v) for v in obj]
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return yaml_safe(obj.tolist())
+    return obj
+
+
 def main():
     ap = argparse.ArgumentParser(description="根据现场标注图自动标定增强参数")
     ap.add_argument("--mode", choices=["single", "compare"], required=True)
@@ -433,7 +451,7 @@ def main():
     with open(args.out_yaml, "w", encoding="utf-8") as f:
         f.write("# 由 tools/calibrate_augment_profile.py 自动生成（数据驱动增强标定）\n"
                 f"# 用法：config.yaml 的 synth.profile 设为 {args.out_yaml}（相对项目根）即覆盖 aug 段\n")
-        yaml.safe_dump(profile, f, sort_keys=False, allow_unicode=True)
+        yaml.safe_dump(yaml_safe(profile), f, sort_keys=False, allow_unicode=True)
     print(f"profile → {args.out_yaml}")
 
     rep = {
