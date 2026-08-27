@@ -553,11 +553,13 @@ class BatchSynthesizer:
             perv = self.sc["TARGET_PERSPECTIVE"].get(ttype)
             hm_persp = None
             if perv and random.random() < perv[0]:
-                h, w = img.shape[:2]
-                d = perv[1] * min(w, h)
+                # 以 s_init 缩放后的 (nw,nh) 为基准（与 _warp_slot 中图像 resize 后一致），
+                # 偏移幅度也在新尺度上取，避免透视作用于错误尺度导致强度/裁剪异常。
+                nw0, nh0 = max(1, int(img.shape[3] * s_init)), max(1, int(img.shape[2] * s_init))
+                d = perv[1] * min(nw0, nh0)
                 r = lambda: random.uniform(-d, d)
-                src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
-                dst = np.float32([[r(), r()], [w + r(), r()], [w + r(), h + r()], [r(), h + r()]])
+                src = np.float32([[0, 0], [nw0, 0], [nw0, nh0], [0, nh0]])
+                dst = np.float32([[r(), r()], [nw0 + r(), r()], [nw0 + r(), nh0 + r()], [r(), nh0 + r()]])
                 hm_persp = cv2.getPerspectiveTransform(src, dst)
             rl, rh = self.sc["TARGET_ROTATE"].get(ttype, (-45, 45))
             angle = round(random.uniform(rl, rh), 1)
@@ -585,6 +587,10 @@ class BatchSynthesizer:
             else:
                 print(f"⚠️ target 菜单不支持的 op：{op['type']}")
         nw, nh = max(1, int(img.shape[3] * slot["s_init"])), max(1, int(img.shape[2] * slot["s_init"]))
+        # 必须先把 s_init 缩放落实到图像（CPU apply_augmentation: resize → 菜单 → 旋转）。
+        # 否则矩阵定义于 (nw,nh) 而输入仍是 (w,h)，采样错位 → 目标被画布直角切边。
+        if (nw, nh) != (img.shape[3], img.shape[2]):
+            img = F.interpolate(img, size=(nh, nw), mode="bilinear")
         # 透视（3x3）+ 旋转 expand（3x3）
         hm = slot["persp"] if slot["persp"] is not None else np.eye(3)
         max_w, max_h = nw, nh
