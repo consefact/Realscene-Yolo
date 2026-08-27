@@ -4,7 +4,7 @@ train: train/images
 val: val/images
 nc: 7
 names:
-  0: house
+  0: pillbox
   1: tent
   2: tank
   3: car

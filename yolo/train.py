@@ -58,4 +58,5 @@ if __name__ == "__main__":
         optimizer=t.optimizer,
         lr0=t.lr0,
         pretrained=True,
+        save_period=t.save_period,
     )
