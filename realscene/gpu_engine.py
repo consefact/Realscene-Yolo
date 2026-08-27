@@ -150,6 +150,9 @@ def load_target_images(cfg, crop_map):
                     if file.lower().endswith(IMG_EXT):
                         add(os.path.join(root, file), dc)
         for fc in file_classes:
+            if fc not in cfg["CLASSES"]:      # 目录里的无关文件(如 *_overlay.jpg)跳过而非报错
+                print(f"跳过目标文件(类名不在 classes)：{fc}")
+                continue
             for e in IMG_EXT:
                 p = os.path.join(target_dir, fc + e)
                 if os.path.exists(p):
