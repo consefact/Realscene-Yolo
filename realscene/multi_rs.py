@@ -671,11 +671,12 @@ def one_epoch():
         return
 
     shared_manager = SharedTargetManager(target_images)  # 初始化全局管理器
-    
+
+    t0 = time.perf_counter()
     # 创建进程池
     num_cores = max(1, multiprocessing.cpu_count() - 1)
     pool = multiprocessing.Pool(processes=num_cores)
-    
+
     # 准备任务参数（不再传递manager）
     tasks = [(round_num, epoch) for round_num in range(NUM_ROUNDS)]
 
@@ -701,15 +702,17 @@ def one_epoch():
         finally:
             pool.close()
             pool.join()
+    print(f"Epoch {epoch + 1} 用时 {time.perf_counter() - t0:.1f}s（完成 {completed} 轮）")
 
 def main(epochs=10):
     """主函数"""
     global epoch
+    t_all = time.perf_counter()
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
         one_epoch()
         print(f"Epoch {epoch + 1} 完成！")
-    print("所有轮次完成！")
+    print(f"所有轮次完成！总用时 {time.perf_counter() - t_all:.1f}s")
 
 if __name__ == "__main__":
     # 确保在Linux上正确使用fork

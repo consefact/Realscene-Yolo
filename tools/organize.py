@@ -2,6 +2,7 @@ import os
 import sys
 import shutil
 import random
+import time
 
 # --- 载入统一配置 ---
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +38,7 @@ def copy_pairs(file_list, src_dir, img_dst, label_dst):
 
 
 def main():
+    t0 = time.perf_counter()
     src_dir = CFG.paths.synth_output
     target_dir = CFG.paths.dataset
     val_ratio = CFG.dataset.val_ratio  # 验证集比例
@@ -63,7 +65,7 @@ def main():
                os.path.join(target_dir, 'val', 'images'),
                os.path.join(target_dir, 'val', 'labels'))
 
-    print(f"完成 → {target_dir}/")
+    print(f"完成 → {target_dir}/（用时 {time.perf_counter() - t0:.1f}s）")
 
 
 if __name__ == '__main__':

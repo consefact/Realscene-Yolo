@@ -11,6 +11,7 @@
 import os
 import sys
 import random
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,6 +20,7 @@ import cv2
 import torch
 import torch.nn.functional as F
 from PIL import Image
+from tqdm import tqdm
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -763,7 +765,10 @@ class BatchSynthesizer:
         self._round_seq = [0]
         n_rounds = rounds or self.sc["NUM_ROUNDS"]
         made = n_empty = 0
+        t0 = time.perf_counter()
         used_targets = [0] * len(self.target_images_np)
+        pbar = tqdm(total=n_rounds, desc=f"Epoch {epoch + 1}", unit="img",
+                    dynamic_ncols=True, miniters=1)
         while made < n_rounds and not all(u >= self.sc["TARGET_REPEAT"] for u in used_targets):
             n = min(self.batch_size, n_rounds - made)
             plans, labels_list, cpu_list = [], [], []
@@ -800,6 +805,7 @@ class BatchSynthesizer:
                 images[i:i + 1] = img_i
                 labels_list.append(labels)
                 made += 1
+                pbar.update(1)
             if not plans:
                 break
             images = self._apply_final_menu(images, plans)
@@ -811,6 +817,10 @@ class BatchSynthesizer:
                     f.result()
         for f in self._pending:
             f.result()
+        pbar.close()
+        dt = time.perf_counter() - t0
+        rate = made / dt if dt > 0 else 0.0
+        print(f"Epoch {epoch + 1} 完成：产出 {made} 张，用时 {dt:.1f}s （{rate:.1f} img/s）")
         return made
 
     def run(self, epochs=None):
@@ -839,11 +849,18 @@ class BatchSynthesizer:
                 self._tmpl_note = getattr(self, "_tmpl_note", 0) + 1
         if getattr(self, "_tmpl_note", 0):
             print(f"GPU 引擎：{self._tmpl_note} 张目标已降模板至 {template_max}px")
+        made_total = 0
+        t_all = time.perf_counter()
         with torch.inference_mode():
-            for ep in range(epochs or self.sc["EPOCHS"]):
-                print(f"Epoch {ep + 1}/{epochs or self.sc['EPOCHS']}")
+            n_ep = epochs or self.sc["EPOCHS"]
+            for ep in range(n_ep):
+                print(f"Epoch {ep + 1}/{n_ep}")
                 made = self.run_epoch(ep)
-                print(f"Epoch {ep + 1} 完成：产出 {made} 张")
+                made_total += made
+        dt_all = time.perf_counter() - t_all
+        rate = made_total / dt_all if dt_all > 0 else 0.0
+        print(f"── 全部完成：{n_ep} epochs，共 {made_total} 张，总用时 {dt_all:.1f}s "
+              f"（{rate:.1f} img/s）")
         return made
 
 

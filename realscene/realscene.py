@@ -1,6 +1,7 @@
 import os
 import sys
 import random
+import time
 from PIL import Image
 import numpy as np
 import cv2
@@ -586,6 +587,7 @@ def one_epoch():
 
     print(f"背景图: {len(bg_paths)} 张, 靶标: {len(target_images)} 个 (repeat={TARGET_REPEAT})")
     used_targets = [0] * len(target_images)
+    t0 = time.perf_counter()
 
     for round_num in tqdm(range(NUM_ROUNDS), desc=f"Epoch :{epoch + 1}",
                           total=NUM_ROUNDS, dynamic_ncols=True, miniters=1):
@@ -593,6 +595,7 @@ def one_epoch():
             print(f"Round {round_num}: 所有目标已用完，停止该轮处理")
             break
         process_round(round_num, target_images, used_targets, bg_paths)
+    print(f"Epoch {epoch + 1} 用时 {time.perf_counter() - t0:.1f}s")
 
 
 def count_txt_files_recursive(directory):
@@ -607,11 +610,12 @@ def count_txt_files_recursive(directory):
 def main(epochs=10):
     """主函数"""
     global epoch
+    t_all = time.perf_counter()
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
         one_epoch()
         print(f"Epoch {epoch + 1} 完成！")
-    print("所有轮次完成！")
+    print(f"所有轮次完成！总用时 {time.perf_counter() - t_all:.1f}s")
 
 
 if __name__ == "__main__":
