@@ -76,20 +76,35 @@ synth:
         - {type: ink_reflection, prob: 0.0}                  # 默认关闭（油墨反光，需要时开启）
         - {type: motion_blur,   prob: 0.3, length: [5, 15], angle: [0, 180]}  # 动态模糊（相机抖动拖影）
 
-  # 目标类型：每类目标一个来源目录 + ROI 定义 + 缩放范围。
+  # 目标类型：每类目标一个来源目录 + ROI/标注定义 + 缩放范围。
   #   roi: null              → 整张目标图就是检测框（最常用）
   #   roi: [rx, ry, rw, rh]  → 目标图是"底板"，只框内部 ROI（相对目标框的比例）
+  #   label_dir: <同布局目录> → "打框 alpha"图（与 dir 同相对路径/文件名，同画布），
+  #                            标注紧框取自该图 alpha——透视/旋转（单应）下框贴合内容，
+  #                            ROI 失效（label alpha 直接定义打框区域）。
   # 可配置多个类型，realscene 会全部加载并混合使用。
   target_types:
-    objects:
-      dir: ./delivery-3/target           # 目标样例目录，按类分子目录（子目录名=classes）
-      roi: null                      # 整图即目标；若目标是底板只想框内部，改成 [rx,ry,rw,rh]
+    # ---- 5 类（bridge/car/pillbox/tank/tent）：环 + 中心识别区 ----
+    # 贴图=完整环+中心（环保留作上下文），打框=中心识别区（label_dir=inner）
+    ring_center:
+      dir: ./delivery/target/ring       # 环+中心完整图（每类一张，flat 文件名=类名）
+      label_dir: ./delivery/target/inner   # 打框 alpha：仅中心识别区（与 ring 同画布）
       scale: [0.3, 1.2]             # 目标初始缩放范围
       rotate: [-180, 180]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
       perspective: [0.5, 0.20]      # [prob, distortion] 透视形变(模拟相机畸变/倾斜视角)：
                                     # 50% 概率、四角独立扰动 ±10% 最短边；null=关闭。标注仍紧贴变形后物体
       feather: 4                     # 边缘羽化半径(px)（消灭抠图硬边；0=关闭）
       crop_transparent: true         # 贴入前裁掉 alpha=0 的透明边距（紧框更准）
+    # ---- H/cross：无外周靶标，整图即目标（roi: null）----
+    # 单独目录（只含 H/cross）；delivery-3/target 里混着 5 类的中心图，不能直接引用
+    h_and_cross:
+      dir: ./delivery/target/h_direct
+      roi: null                      # 整图即目标（H/cross 本身即中心识别区，无环）
+      scale: [0.3, 1.2]
+      rotate: [-180, 180]
+      perspective: [0.5, 0.20]
+      feather: 4
+      crop_transparent: true
     # ---- 底板 + ROI 示例（复现原 CIFAR 版的 34/32 内缩，可按需启用）----
     # synthetic:
     #   dir: ./synthetic_targets
