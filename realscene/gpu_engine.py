@@ -267,6 +267,86 @@ def t_poisson(img, intensities, rng=None):
     return torch.clamp(img + torch.from_numpy(noise).to(img.device), 0, 255)
 
 
+_GAUSS7 = None
+
+
+def _gauss7_kernel(device, dtype):
+    """cv2 GaussianBlur(σ=1.0) 等价的 7x7 核（与 CPU aug_sharpness 对齐）。"""
+    global _GAUSS7
+    if _GAUSS7 is None:
+        k = cv2.getGaussianKernel(7, 1.0)
+        _GAUSS7 = np.outer(k, k).astype(np.float32)
+    return torch.tensor(_GAUSS7, device=device, dtype=dtype)
+
+
+def t_sharpness(img, amount, rng=None):
+    """锐化（unsharp mask）：对齐 CPU aug_sharpness —— (1+a)*img - a*GaussianBlur(σ=1)。"""
+    k = _gauss7_kernel(img.device, img.dtype).view(1, 1, 7, 7)
+    k = k.expand(img.shape[1], 1, 7, 7)
+    blurred = F.conv2d(img, k, padding=3, groups=img.shape[1])
+    a = amount.view(-1, 1, 1, 1)
+    return torch.clamp((1.0 + a) * img - a * blurred, 0, 255)
+
+
+def t_geometric(images, distortions, rng=None):
+    """批量背景透视扰动：对齐 CPU aug_geometric（四角**独立**向内收缩、CUBIC、BORDER_REPLICATE）。
+    作用在 base 层（贴目标前），不影响标注；输出尺寸不变。"""
+    B, C, H, W = images.shape
+    if images.device.type == "cpu":
+        out = images.clone()
+        for i, d in enumerate(distortions):
+            hm = _persp_shrink_hm(W, H, d, rng)
+            img8 = images[i].permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy()
+            warped = cv2.warpPerspective(img8, hm, (W, H), flags=cv2.INTER_CUBIC,
+                                         borderMode=cv2.BORDER_REPLICATE)
+            out[i] = torch.from_numpy(warped).permute(2, 0, 1).float()
+        return out
+    # GPU：批量一次 grid_sample（bicubic 要求 align_corners=True；border 复刻 BORDER_REPLICATE）
+    hms_inv = np.stack([np.linalg.inv(_persp_shrink_hm(W, H, d, rng)) for d in distortions])
+    m = torch.tensor(hms_inv, dtype=torch.float32, device=images.device)
+    px = torch.linspace(0, W - 1, W, device=images.device)
+    py = torch.linspace(0, H - 1, H, device=images.device)
+    gx, gy = torch.meshgrid(px, py, indexing="xy")
+    grid = torch.stack([gx, gy, torch.ones_like(gx)], dim=-1).view(1, -1, 3)
+    src_pts = grid.expand(B, -1, 3) @ m.transpose(1, 2)        # [B,HW,3]
+    wx = src_pts[..., 2].clamp(min=1e-8)
+    sx = (src_pts[..., :2] / wx.unsqueeze(-1)).view(B, H, W, 2).contiguous()
+    sx[..., 0] = sx[..., 0] * 2.0 / (W - 1) - 1.0
+    sx[..., 1] = sx[..., 1] * 2.0 / (H - 1) - 1.0
+    return torch.clamp(F.grid_sample(images, sx, mode="bicubic", padding_mode="border",
+                                     align_corners=True), 0, 255)
+
+
+def _persp_shrink_hm(W, H, d, rng):
+    """四角向内收缩的透视矩阵（src→dst；四角偏移各自独立随机，与 CPU 版逐角调用一致）。
+    rng 为 numpy RandomState（random.randint 闭区间 vs rng.randint 半开：+1 对齐）。"""
+    src = np.float32([[0, 0], [W, 0], [W, H], [0, H]])
+    dst = np.float32([
+        [rng.randint(0, int(W * d) + 1), rng.randint(0, int(H * d) + 1)],
+        [W - rng.randint(0, int(W * d) + 1), rng.randint(0, int(H * d) + 1)],
+        [W - rng.randint(0, int(W * d) + 1), H - rng.randint(0, int(H * d) + 1)],
+        [rng.randint(0, int(W * d) + 1), H - rng.randint(0, int(H * d) + 1)],
+    ])
+    return cv2.getPerspectiveTransform(src, dst)
+
+
+def t_ink_reflection(images, rng=None):
+    """批量油墨反光：随机椭圆高光斑（对齐 CPU aug_ink_reflection；无参数项）。"""
+    B, C, H, W = images.shape
+    out = images.clone()
+    for i in range(B):
+        cx = rng.randint(int(W * 0.2), int(W * 0.8) + 1)
+        cy = rng.randint(int(H * 0.2), int(H * 0.8) + 1)
+        rx, ry = rng.randint(10, 41), rng.randint(10, 41)
+        mask = np.zeros((H, W), dtype=np.float32)
+        cv2.ellipse(mask, (cx, cy), (rx, ry), rng.randint(0, 361), 0, 360, 1.0, -1)
+        mask = cv2.GaussianBlur(mask, (21, 21), 0)
+        mask = np.clip(mask * rng.uniform(0.5, 1.5), 0, 1)
+        out[i] = torch.clamp(images[i] + torch.from_numpy(mask[None, ...] * 255.0).to(images.device),
+                             0, 255)
+    return out
+
+
 # ---- GPU 几何：矩阵/网格（与 cv2 语义对齐） ----
 def _rotate_expand_dims(w, h, angle):
     """复刻 _rotate_rgba 的 expand 尺寸与 cos/sin 浮点钳位。"""
@@ -522,6 +602,12 @@ class BatchSynthesizer:
             elif tp == "hsv":
                 d3 = torch.tensor([[p["value"]] * 3 for p in params]).to(images)
                 images[idxs] = t_hsv(sub, d3)
+            elif tp == "sharpness":
+                amt = torch.tensor([p.get("value", 1.0) for p in params]).to(images).view(-1, 1, 1, 1)
+                images[idxs] = t_sharpness(sub, amt, self._rng)
+            elif tp == "geometric":
+                images[idxs] = t_geometric(sub, [p.get("distortion", 0.1) for p in params],
+                                           self._rng)
             elif tp == "cutout":
                 rects, noises = [], []
                 for p in params:
@@ -531,8 +617,6 @@ class BatchSynthesizer:
                     rects.append((y0, min(hh, y0 + size), x0, min(ww, x0 + size)))
                     noises.append(1.0)
                 images = t_cutout(images, rects, torch.tensor(noises).to(images), self._rng)
-            elif tp == "geometric":
-                print("⚠️ geometric 在 P1 未启用（P4 补充）")
             else:
                 print(f"⚠️ 未知增强类型：{tp}，跳过")
         return images
@@ -587,7 +671,11 @@ class BatchSynthesizer:
                            "color": t_color}[op["type"]](img[:, :3].contiguous(), f)
                 img = torch.cat([rgb_new, img[:, 3:4]], dim=1)
             elif op["type"] == "sharpness":
-                pass      # P4 实现
+                img = torch.cat([t_sharpness(img[:, :3].contiguous(),
+                                             torch.tensor([op["params"]["value"]],
+                                                          device=img.device),
+                                             self._rng),
+                                 img[:, 3:4]], dim=1)
             else:
                 print(f"⚠️ target 菜单不支持的 op：{op['type']}")
         nw, nh = max(1, int(img.shape[3] * slot["s_init"])), max(1, int(img.shape[2] * slot["s_init"]))
@@ -741,6 +829,8 @@ class BatchSynthesizer:
             elif tp == "poisson":
                 it = torch.tensor([p["value"] for p in params]).to(images)
                 images[idxs] = t_poisson(sub, it, self._rng)
+            elif tp == "ink_reflection":
+                images[idxs] = t_ink_reflection(sub, self._rng)
             else:
                 print(f"⚠️ final 未适配类型：{tp}")
         return images
