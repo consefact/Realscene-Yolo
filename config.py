@@ -81,8 +81,12 @@ def _resolve_paths(cfg, root):
         tt = synth.get("target_types")
         if isinstance(tt, dict):
             for spec in tt.values():
-                if isinstance(spec, dict) and spec.get("dir"):
-                    spec["dir"] = _abs(root, spec["dir"])
+                if isinstance(spec, dict):
+                    # label_dir：与 dir 同布局的"打框 alpha"目录（紧框取自它，透视不漂移）
+                    if spec.get("dir"):
+                        spec["dir"] = _abs(root, spec["dir"])
+                    if spec.get("label_dir"):
+                        spec["label_dir"] = _abs(root, spec["label_dir"])
     return cfg
 
 

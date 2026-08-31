@@ -60,6 +60,13 @@ def extract_synth_cfg(cfg):
     }
     tt = out["TARGET_TYPES"]
     out["TARGET_ROI"] = {t: (list(s["roi"]) if s.get("roi") else None) for t, s in tt.items()}
+    # label_dir（可选）：与 dir 同布局的"打框 alpha"图目录——标注紧框取自其 alpha，
+    # 而非贴图 alpha；透视/旋转后仍贴合内容（单应变换不保比例，ROI 会漂移）。
+    out["TARGET_LABEL_DIR"] = {t: (s.get("label_dir") or None) for t, s in tt.items()}
+    # 配了 label_dir 的类型：ROI 失效（label alpha 已直接定义打框区域）
+    for t, labdir in out["TARGET_LABEL_DIR"].items():
+        if labdir:
+            out["TARGET_ROI"][t] = None
     out["TARGET_SCALE"] = {t: tuple(s.get("scale", [0.5, 1.0])) for t, s in tt.items()}
     out["TARGET_ROTATE"] = {t: tuple(s.get("rotate", [-45, 45])) for t, s in tt.items()}
     out["TARGET_PERSPECTIVE"] = {t: (tuple(s["perspective"]) if s.get("perspective") else None)
@@ -96,8 +103,9 @@ def pick_device(backend, verbose=True):
 # ============================================================================
 
 def _crop_transparent(img, room=0):
-    """裁掉 alpha=0 的透明边距（与 realscene.py 一致）。"""
-    if img.shape[2] != 4:
+    """裁掉 alpha=0 的透明边距（与 realscene.py 一致）。
+    5 通道（RGBA + 打框 alpha）：以贴图 alpha 的 bbox 裁剪，各通道同步。"""
+    if img.ndim != 3 or img.shape[2] != 4 and img.shape[2] != 5:
         return img
     a = img[:, :, 3]
     if a.all() or not a.any():
@@ -135,9 +143,23 @@ def load_target_images(cfg, crop_map):
             print("   请只保留一种布局：要么删除文件夹，要么删除同名图片文件。")
             sys.exit(1)
 
+        label_dir = cfg.get("TARGET_LABEL_DIR", {}).get(ttype)   # 可选：打框 alpha 目录
+
         def add(path, category):
             try:
                 img = np.array(Image.open(path).convert("RGBA"))
+                if label_dir:
+                    # 同画布打框图：目录相对路径 → 画在 label_dir 下
+                    rel = os.path.relpath(path, target_dir)
+                    lp = os.path.join(label_dir, rel)
+                    if not os.path.exists(lp):
+                        print(f"  ⚠️ 缺打框图：{lp}，跳过 {path}")
+                        return
+                    lab = np.array(Image.open(lp).convert("RGBA"))
+                    if lab.shape != img.shape:
+                        print(f"  ⚠️ 打框图与贴图尺寸不一致：{lp} {lab.shape[:2]} vs {img.shape[:2]}，跳过")
+                        return
+                    img = np.dstack([img, lab[:, :, 3]])
                 if crop_map.get(ttype, True):
                     img = _crop_transparent(img)
                 target_images.append((img, cfg["CLASSES"].index(category),
@@ -714,18 +736,18 @@ class BatchSynthesizer:
                 f = torch.tensor([op["params"]["value"]], device=img.device)
                 rgb_new = {"brightness": t_brightness, "contrast": t_contrast,
                            "color": t_color}[op["type"]](img[:, :3].contiguous(), f)
-                img = torch.cat([rgb_new, img[:, 3:4]], dim=1)
+                img = torch.cat([rgb_new, img[:, 3:]], dim=1)
             elif op["type"] == "sharpness":
                 img = torch.cat([t_sharpness(img[:, :3].contiguous(),
                                              torch.tensor([op["params"]["value"]],
                                                           device=img.device),
                                              self._rng),
-                                 img[:, 3:4]], dim=1)
+                                 img[:, 3:]], dim=1)
             elif op["type"] == "motion_blur":
                 img = torch.cat([t_motion_blur(img[:, :3].contiguous(),
                                                [op["params"]["length"]],
                                                [op["params"]["angle"]], self._rng),
-                                 img[:, 3:4]], dim=1)
+                                 img[:, 3:]], dim=1)
             else:
                 print(f"⚠️ target 菜单不支持的 op：{op['type']}")
         nw, nh = max(1, int(img.shape[3] * slot["s_init"])), max(1, int(img.shape[2] * slot["s_init"]))
@@ -751,14 +773,25 @@ class BatchSynthesizer:
         # 折叠：S ∘ (旋转∘透视)，一次采样到最终尺寸
         s_mat = np.diag([fw / max_w, fh / max_h, 1.0])
         hm_full = s_mat @ hm
+        # 打框 alpha（5 通道）：与贴图 alpha 同矩阵 warp，紧框取自它（透视/旋转不漂移）
+        has_label = img.shape[1] >= 5
         if self.sc.get("GPU_WARP_CV", True):
             rgb_o, al_o = _warp_rgba_cv(img[:, :3].contiguous(), img[:, 3:4].contiguous(),
                                         hm_full, fh, fw)
+            if has_label:
+                lab = img[:, 4:5].contiguous()
+                lab3 = lab.expand(1, 3, lab.shape[2], lab.shape[3])   # 1ch→3ch（warp cv 假定 3 通道）
+                lab_o = _warp_rgba_cv(lab3, lab, hm_full, fh, fw)[1]
+            else:
+                lab_o = None
         else:
             rgb_o, al_o = _warp_rgba_tensor(img[:, :3].contiguous(), img[:, 3:4].contiguous(),
                                             hm_full, fh, fw)
+            lab_o = (_warp_rgba_tensor(img[:, 4:5].contiguous(), img[:, 4:5].contiguous(),
+                                       hm_full, fh, fw)[1] if has_label else None)
         # tight 延后到整图尾部批计算（消除逐 slot CPU 同步）
-        return rgb_o, al_o, None, fw, fh
+        lab_o = lab_o if (has_label and lab_o is not None) else al_o   # 无 label → 回退贴图 alpha
+        return rgb_o, al_o, lab_o, fw, fh
 
     def _place_paste(self, img_tensor, rgb_o, al_o, ttype, placed_bboxes, w=None, h=None):
         """放置拒绝 + GPU paste（warp 已含比例缩放）。返回 (rec or None, 是否成功)。
@@ -838,7 +871,7 @@ class BatchSynthesizer:
             rgb_o, al_o, tight, w, h = out
             rec, ok = self._place_paste(img, rgb_o, al_o, slot["ttype"], placed, w, h)
             if ok:
-                retained.append((al_o, rec, slot["cid"], slot["ttype"]))
+                retained.append((tight, rec, slot["cid"], slot["ttype"]))
                 used_targets[slot["t"]] += 1
                 plan["failed"] = 0
             else:
@@ -846,6 +879,7 @@ class BatchSynthesizer:
                 if plan["failed"] >= self.sc["MAX_TARGET_FAILURE"]:
                     break
         # 整图尾部：一次批 bbox（单次 GPU→CPU 同步）→ 组装标签
+        # tight 优先 = 打框 alpha（label 通道；透视/旋转不漂移），无 label 回退贴图 alpha
         if retained:
             maxh = max(int(a.shape[2]) for a, *_ in retained)
             maxw = max(int(a.shape[3]) for a, *_ in retained)

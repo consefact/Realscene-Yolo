@@ -46,6 +46,13 @@ AUG_MENUS = dict(_S.get("aug", {}))
 TARGET_TYPES = dict(_S.target_types)
 TARGET_ROI = {t: (list(spec["roi"]) if spec.get("roi") else None)
               for t, spec in TARGET_TYPES.items()}
+# label_dir（可选）：与 dir 同布局的"打框 alpha"图目录——标注紧框取自其 alpha，
+# 而非贴图 alpha；透视/旋转后仍贴合内容（单应变换不保比例，ROI 会漂移）。
+TARGET_LABEL_DIR = {t: (spec.get("label_dir") or None) for t, spec in TARGET_TYPES.items()}
+# 配了 label_dir 的类型：ROI 失效（label alpha 直接定义打框区域）
+for _t, _ld in TARGET_LABEL_DIR.items():
+    if _ld:
+        TARGET_ROI[_t] = None
 TARGET_SCALE = {t: tuple(spec.get("scale", [0.5, 1.0])) for t, spec in TARGET_TYPES.items()}
 TARGET_ROTATE = {t: tuple(spec.get("rotate", [-45, 45])) for t, spec in TARGET_TYPES.items()}
 # 透视形变 [prob, distortion]：概率触发、四角扰动 ±distortion*min(w,h)；null=关闭
@@ -116,7 +123,7 @@ def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5), fill="noise"):
 
 def aug_perspective(img, distortion=0.1):
     """目标透视形变（模拟相机畸变/倾斜视角）：四角独立随机扰动 → PerspectiveTransform。
-    RGBA（alpha 邻近插值、透明 borderValue）；紧框由后续 alpha bbox 自动贴合。"""
+    RGB 双线性、alpha 及打框 alpha 通道邻近（透明 borderValue）；紧框由后续 bbox 自动贴合。"""
     h, w = img.shape[:2]
     d = distortion * min(w, h)
     r = lambda: random.uniform(-d, d)
@@ -124,8 +131,11 @@ def aug_perspective(img, distortion=0.1):
     dst = np.float32([[r(), r()], [w + r(), r()], [w + r(), h + r()], [r(), h + r()]])
     m = cv2.getPerspectiveTransform(src, dst)
     rgb = cv2.warpPerspective(img[:, :, :3], m, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
-    alpha = cv2.warpPerspective(img[:, :, 3], m, (w, h), flags=cv2.INTER_NEAREST, borderValue=0)
-    return np.dstack([rgb, alpha])
+    if img.shape[2] > 3:
+        rest = cv2.warpPerspective(img[:, :, 3:], m, (w, h),
+                                   flags=cv2.INTER_NEAREST, borderValue=0)
+        return np.dstack([rgb, rest])
+    return rgb
 
 
 def aug_geometric(img, distortion=0.1):
@@ -229,13 +239,13 @@ def apply_aug_menu(img, menu_def):
             if func is None:
                 print(f"⚠️ 未知增强类型：{item['type']}，跳过")
                 continue
-            is_rgba = img.ndim == 3 and img.shape[2] == 4
+            is_rgba = img.ndim == 3 and img.shape[2] >= 4
             if is_rgba:
-                rgb, alpha = img[:, :, :3].copy(), img[:, :, 3]
+                rgb, rest = img[:, :, :3].copy(), img[:, :, 3:]
                 rgb = func(rgb, **kwargs)
                 if item["type"] == "flip":
-                    alpha = alpha[:, ::-1].copy()
-                img = np.dstack([rgb, alpha])
+                    rest = rest[:, ::-1].copy()
+                img = np.dstack([rgb, rest])
             else:
                 img = func(img, **kwargs)
     return img
@@ -252,8 +262,9 @@ def _build_edge_feather_alpha(w, h, radius):
 
 
 def _crop_transparent(img, room=0):
-    """裁掉 alpha=0 的透明边距（保留 room px 余量）。返回裁剪后图；无透明边距则原样。"""
-    if img.shape[2] != 4:
+    """裁掉 alpha=0 的透明边距（保留 room px 余量）。返回裁剪后图；无透明边距则原样。
+    5 通道（RGBA + 打框 alpha）：以贴图 alpha 的 bbox 裁剪，各通道同步。"""
+    if img.ndim != 3 or img.shape[2] < 4:
         return img
     a = img[:, :, 3]
     if a.all() or not a.any():
@@ -273,10 +284,13 @@ def _alpha_bbox(alpha):
 
 
 def _rotate_rgba(img, angle):
-    """旋转 RGBA（RGB 双线性、alpha 邻近），返回 (旋转后图, 紧致 bbox 或 None)。
-    紧框 = 旋转后 alpha>0 的真实内容包围盒（透明圆角/不规则底图也贴边）。"""
+    """旋转 RGBA（RGB 双线性、alpha/打框 alpha 邻近），返回 (旋转后图, 紧致 bbox 或 None)。
+    紧框优先取打框 alpha（通道 4，若存在=label_alpha 直接定义检测框；透视/旋转下不漂移），
+    否则取贴图 alpha 的真实内容包围盒（透明圆角/不规则底图也贴边）。"""
+    has_label = img.shape[2] >= 5
     if abs(angle) < 0.01:
-        return img, _alpha_bbox(img[:, :, 3])
+        label = img[:, :, 4] if has_label else img[:, :, 3]
+        return img, _alpha_bbox(label)
     h, w = img.shape[:2]
     cos_a, sin_a = abs(np.cos(np.radians(angle))), abs(np.sin(np.radians(angle)))
     # 消除 cos(90°)≈6e-17 类浮点误差：接近整值(0/1)时钳位
@@ -290,9 +304,10 @@ def _rotate_rgba(img, angle):
     m[0, 2] += (max_w - w) / 2.0
     m[1, 2] += (max_h - h) / 2.0
     rgb = cv2.warpAffine(img[:, :, :3], m, (max_w, max_h), flags=cv2.INTER_LINEAR, borderValue=0)
-    alpha = cv2.warpAffine(img[:, :, 3], m, (max_w, max_h), flags=cv2.INTER_NEAREST, borderValue=0)
-    # 紧框：以 alpha 内容为准（而非整图四角——那必然等于 expand 画布）
-    return np.dstack([rgb, alpha]), _alpha_bbox(alpha)
+    rest = cv2.warpAffine(img[:, :, 3:], m, (max_w, max_h), flags=cv2.INTER_NEAREST, borderValue=0)
+    # 紧框：以打框 alpha（或贴图 alpha）内容为准（而非整图四角——那必然等于 expand 画布）
+    label = rest[:, :, 1] if has_label else rest[:, :, 0]
+    return np.dstack([rgb, rest]), _alpha_bbox(label)
 
 
 # ============================================================================
@@ -341,6 +356,11 @@ def load_target_images():
       <dir>/<类名>/xxx.png   文件夹类，类名 = 子目录名（文件可任意嵌套）
       <dir>/<类名>.png       单图类，类名 = 文件名去掉扩展名（无需建文件夹）
     同名冲突（同名的文件夹和图片文件同时存在）→ 报错退出。
+
+    可选 label_dir：与 dir 同布局的"打框 alpha"图目录（同一相对路径/文件名）。
+    有 label 的贴图合并为 5 通道 [R,G,B,alpha贴图,alpha打框]：
+      - 贴图渲染/放置用通道 3（环+中心，环保留）；
+      - 打框紧框用通道 4（仅中心识别区，透视/旋转后不漂移）。
     """
     target_images = []
     dir_type_map = []
@@ -354,6 +374,7 @@ def load_target_images():
     IMG_EXT = ('.png', '.jpg', '.jpeg')
 
     for target_dir, target_type in dir_type_map:
+        label_dir = TARGET_LABEL_DIR.get(target_type)
         dir_classes, file_classes = [], []
         for entry in sorted(os.listdir(target_dir)):
             full = os.path.join(target_dir, entry)
@@ -376,6 +397,18 @@ def load_target_images():
             nonlocal target_images
             try:
                 img = np.array(Image.open(path).convert("RGBA"))
+                if label_dir:
+                    # 同画布打框图：相对目标目录 <n> 的部分 → label_dir/<n>
+                    rel = os.path.relpath(path, target_dir)
+                    lp = os.path.join(label_dir, rel)
+                    if not os.path.exists(lp):
+                        print(f"  ⚠️ 缺打框图：{lp}，跳过 {path}")
+                        return
+                    lab = np.array(Image.open(lp).convert("RGBA"))
+                    if lab.shape != img.shape:
+                        print(f"  ⚠️ 打框图与贴图尺寸不一致：{lp} {lab.shape[:2]} vs {img.shape[:2]}，跳过")
+                        return
+                    img = np.dstack([img, lab[:, :, 3]])   # 5 通道
                 if TARGET_CROP_TRANSPARENT.get(target_type, True):
                     img = _crop_transparent(img)
                 class_id = class_names.index(category)
