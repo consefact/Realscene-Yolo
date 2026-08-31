@@ -74,7 +74,17 @@ python yolo/y8train.py            # 6. 训练 → paths.yolo_runs
 3. 把背景照片放进 `paths.backgrounds`。
 4. 跑第 3~6 步即可。
 
-### 7. 注意点
+### 7. 增强功能全集
+
+所有增强（像素级菜单 / 几何增强 / 隐性机制 / 数据驱动校准）的详细清单、参数、用法见
+
+**[docs/augmentation.md](docs/augmentation.md)**
+
+要点速览：`config.yaml` 的 `synth.aug`（base/target/final 三层菜单）控制像素级增强；
+`synth.target_types` 控制目标几何增强（缩放/旋转/透视/羽化）；`label_dir` 是"打框 alpha"
+机制（透视/旋转下标注框贴合内容）；背景随机裁剪本身是最强的背景增强。
+
+### 8. 注意点
 
 - **少图实例模式**：识别特定物体（实例即类，如"场地上的那个橙子/球门"）且每类只有 1~几张目标图时，
   用 `synth.target_repeat`（每目标每 epoch 复用 N 次）直接放大数据量：
