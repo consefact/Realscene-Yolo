@@ -96,7 +96,9 @@ def aug_hsv(img, delta=0.1):
     return cv2.cvtColor((hsv * 255).astype(np.uint8), cv2.COLOR_HSV2RGB)
 
 
-def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5)):
+def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5), fill="noise"):
+    """随机矩形遮挡。fill='noise' 填随机噪声；fill='color' 填随机纯色（模拟彩色遮挡块）。
+    fill='color' 每块一个独立随机色，对齐 legacy 4.py 的色块增强；fill='noise' 为原行为。"""
     out = img.copy()
     h, w = out.shape[:2]
     ms = max(4, min(w, h) // 4)
@@ -104,7 +106,11 @@ def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5)):
         size = random.randint(mask_size[0], min(mask_size[1], ms))
         x = random.randint(0, max(0, w - size))
         y = random.randint(0, max(0, h - size))
-        out[y:y + size, x:x + size] = np.random.randint(0, 256, (size, size, 3), dtype=np.uint8)
+        if fill == "color":
+            color = np.random.randint(0, 256, 3, dtype=np.uint8)
+            out[y:y + size, x:x + size] = color[None, None, :]
+        else:
+            out[y:y + size, x:x + size] = np.random.randint(0, 256, (size, size, 3), dtype=np.uint8)
     return out
 
 
@@ -171,12 +177,36 @@ def aug_ink_reflection(img, *a, **kw):
     return np.clip(_f(img) + mask[..., None] * 255, 0, 255).astype(np.uint8)
 
 
+def _motion_blur_kernel(length, angle):
+    """沿 angle 方向画线的卷积核（对齐 4.py 的 motion blur：长度驱动核尺寸、角度驱动方向）。
+    核归一化后 filter2D，等效沿该方向 L px 的拖影。"""
+    L = max(3, int(length))
+    kernel = np.zeros((L, L), dtype=np.float32)
+    center = L // 2
+    dx = int(np.cos(np.radians(angle)) * center)
+    dy = int(np.sin(np.radians(angle)) * center)
+    x1, y1 = center - dx, center - dy
+    x2, y2 = center + dx, center + dy
+    cv2.line(kernel, (x1, y1), (x2, y2), 1.0, 1)
+    s = kernel.sum()
+    if s > 0:
+        kernel = kernel / s
+    return kernel
+
+
+def aug_motion_blur(img, length=(5, 15), angle=(0, 180)):
+    """动态模糊（相机抖动/目标运动拖影）。length=模糊拖影长度(px)，angle=拖影方向角度。"""
+    k = _motion_blur_kernel(random.randint(*length), random.uniform(*angle))
+    return cv2.filter2D(img, -1, k)
+
+
 APPLY_MAP = {
     "brightness": aug_brightness, "contrast": aug_contrast, "color": aug_color,
     "sharpness": aug_sharpness, "hsv": aug_hsv, "cutout": aug_cutout,
     "geometric": aug_geometric, "flip": aug_flip,
     "gaussian": aug_gaussian, "salt_pepper": aug_salt_pepper,
     "poisson": aug_poisson, "ink_reflection": aug_ink_reflection,
+    "motion_blur": aug_motion_blur,
 }
 
 

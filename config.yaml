@@ -58,6 +58,7 @@ synth:
         - {type: contrast,   prob: 0.5, range: [0.8, 1.2]}
         - {type: color,       prob: 0.5, range: [0.5, 1.5]}
         - {type: hsv,         prob: 0.5, delta: 0.1}
+        # cutout 可选 fill: noise（默认，随机噪声）| color（随机纯色块，模拟彩色遮挡）
         - {type: cutout,      prob: 0.5, mask_size: [50, 100], num_masks: [1, 5]}
         - {type: geometric,   prob: 0.0, distortion: 0.1}   # 默认关闭（透视增强，开启可能改边框特征）
     target:                        # 目标增强（贴入前，RGB 部分，alpha 保持不变）
@@ -73,6 +74,7 @@ synth:
         - {type: salt_pepper,   prob: 0.3, amount: [0.001, 0.005]}
         - {type: poisson,       prob: 0.3, intensity: 0.1}
         - {type: ink_reflection, prob: 0.0}                  # 默认关闭（油墨反光，需要时开启）
+        - {type: motion_blur,   prob: 0.3, length: [5, 15], angle: [0, 180]}  # 动态模糊（相机抖动拖影）
 
   # 目标类型：每类目标一个来源目录 + ROI 定义 + 缩放范围。
   #   roi: null              → 整张目标图就是检测框（最常用）
