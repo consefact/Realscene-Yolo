@@ -228,13 +228,49 @@ def t_hsv(img, deltas):
     return torch.stack([rr, gg, bb], dim=1) * 255.0
 
 
-def t_cutout(img, rects, noise, rng=None):
-    """逐 item 矩形填随机噪声（numpy rng 生成，跨进程确定）。"""
+def t_cutout(img, rects, noise, rng=None, fills=None):
+    """逐 item 矩形填充。fills 为与 rects 等长的 list，'color'=随机纯色块、其余=噪声（原行为）。"""
     out = img
-    for (i, (y0, y1, x0, x1)), nz in zip(enumerate(rects), noise):
-        n = rng.normal(0, 255.0 * float(nz), out[i, :, y0:y1, x0:x1].shape)
-        out[i, :, y0:y1, x0:x1] = torch.from_numpy(np.clip(n, 0, 255)).to(out.device)
+    for i, ((y0, y1, x0, x1), nz) in enumerate(zip(rects, noise)):
+        if fills is not None and fills[i] == "color":
+            color = rng.randint(0, 256, 3).astype(np.float32)
+            out[i, :, y0:y1, x0:x1] = torch.from_numpy(color[:, None, None]).to(out.device)
+        else:
+            n = rng.normal(0, 255.0 * float(nz), out[i, :, y0:y1, x0:x1].shape)
+            out[i, :, y0:y1, x0:x1] = torch.from_numpy(np.clip(n, 0, 255)).to(out.device)
     return out
+
+
+# ---- 动态模糊（对齐 realscene.aug_motion_blur / 4.py 的线核）----
+def _motion_blur_kernel(length, angle):
+    """沿 angle 方向画线卷积核（长度驱动核尺寸、角度驱动方向），归一化后用于卷积。"""
+    L = max(3, int(length))
+    kernel = np.zeros((L, L), dtype=np.float32)
+    center = L // 2
+    dx = int(np.cos(np.radians(angle)) * center)
+    dy = int(np.sin(np.radians(angle)) * center)
+    cv2.line(kernel, (center - dx, center - dy), (center + dx, center + dy), 1.0, 1)
+    s = kernel.sum()
+    if s > 0:
+        kernel = kernel / s
+    return kernel
+
+
+def t_motion_blur(img, lengths, angles, rng=None):
+    """批量动态模糊（motion blur）：每图一个方向拖影核（核小，逐图卷积代价可忽略）。
+    核在 C 通道间共享（group=C 卷积）；边界 reflect 对齐 cv2.filter2D(BORDER_DEFAULT)。
+    lengths/angles: 每图实际的拖影长度与角度。输入 [B,3,H,W] float。"""
+    B, C, H, W = img.shape
+    out = img.clone()
+    for i, (l, a) in enumerate(zip(lengths, angles)):
+        k = _motion_blur_kernel(int(l), float(a))
+        kn = k.shape[0]
+        w = torch.tensor(k, device=img.device, dtype=img.dtype).view(1, 1, kn, kn)
+        w = w.expand(C, 1, kn, kn).contiguous()               # C 通道共享同一核
+        ch = F.pad(img[i].unsqueeze(0), (kn // 2,) * 4, mode="reflect")  # [1,C,H+2p,W+2p]
+        buf = F.conv2d(ch, w, groups=C)
+        out[i:i + 1] = buf[:, :, :H, :W]
+    return out.clamp(0, 255)
 
 
 def t_flip(img):
@@ -265,6 +301,86 @@ def t_poisson(img, intensities, rng=None):
     batch = img.clamp(0, 255) * intensities.view(-1, 1, 1, 1)
     noise = rng.poisson(batch.clamp(0, 255).cpu().numpy()).astype(np.float32)
     return torch.clamp(img + torch.from_numpy(noise).to(img.device), 0, 255)
+
+
+_GAUSS7 = None
+
+
+def _gauss7_kernel(device, dtype):
+    """cv2 GaussianBlur(σ=1.0) 等价的 7x7 核（与 CPU aug_sharpness 对齐）。"""
+    global _GAUSS7
+    if _GAUSS7 is None:
+        k = cv2.getGaussianKernel(7, 1.0)
+        _GAUSS7 = np.outer(k, k).astype(np.float32)
+    return torch.tensor(_GAUSS7, device=device, dtype=dtype)
+
+
+def t_sharpness(img, amount, rng=None):
+    """锐化（unsharp mask）：对齐 CPU aug_sharpness —— (1+a)*img - a*GaussianBlur(σ=1)。"""
+    k = _gauss7_kernel(img.device, img.dtype).view(1, 1, 7, 7)
+    k = k.expand(img.shape[1], 1, 7, 7)
+    blurred = F.conv2d(img, k, padding=3, groups=img.shape[1])
+    a = amount.view(-1, 1, 1, 1)
+    return torch.clamp((1.0 + a) * img - a * blurred, 0, 255)
+
+
+def t_geometric(images, distortions, rng=None):
+    """批量背景透视扰动：对齐 CPU aug_geometric（四角**独立**向内收缩、CUBIC、BORDER_REPLICATE）。
+    作用在 base 层（贴目标前），不影响标注；输出尺寸不变。"""
+    B, C, H, W = images.shape
+    if images.device.type == "cpu":
+        out = images.clone()
+        for i, d in enumerate(distortions):
+            hm = _persp_shrink_hm(W, H, d, rng)
+            img8 = images[i].permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy()
+            warped = cv2.warpPerspective(img8, hm, (W, H), flags=cv2.INTER_CUBIC,
+                                         borderMode=cv2.BORDER_REPLICATE)
+            out[i] = torch.from_numpy(warped).permute(2, 0, 1).float()
+        return out
+    # GPU：批量一次 grid_sample（bicubic 要求 align_corners=True；border 复刻 BORDER_REPLICATE）
+    hms_inv = np.stack([np.linalg.inv(_persp_shrink_hm(W, H, d, rng)) for d in distortions])
+    m = torch.tensor(hms_inv, dtype=torch.float32, device=images.device)
+    px = torch.linspace(0, W - 1, W, device=images.device)
+    py = torch.linspace(0, H - 1, H, device=images.device)
+    gx, gy = torch.meshgrid(px, py, indexing="xy")
+    grid = torch.stack([gx, gy, torch.ones_like(gx)], dim=-1).view(1, -1, 3)
+    src_pts = grid.expand(B, -1, 3) @ m.transpose(1, 2)        # [B,HW,3]
+    wx = src_pts[..., 2].clamp(min=1e-8)
+    sx = (src_pts[..., :2] / wx.unsqueeze(-1)).view(B, H, W, 2).contiguous()
+    sx[..., 0] = sx[..., 0] * 2.0 / (W - 1) - 1.0
+    sx[..., 1] = sx[..., 1] * 2.0 / (H - 1) - 1.0
+    return torch.clamp(F.grid_sample(images, sx, mode="bicubic", padding_mode="border",
+                                     align_corners=True), 0, 255)
+
+
+def _persp_shrink_hm(W, H, d, rng):
+    """四角向内收缩的透视矩阵（src→dst；四角偏移各自独立随机，与 CPU 版逐角调用一致）。
+    rng 为 numpy RandomState（random.randint 闭区间 vs rng.randint 半开：+1 对齐）。"""
+    src = np.float32([[0, 0], [W, 0], [W, H], [0, H]])
+    dst = np.float32([
+        [rng.randint(0, int(W * d) + 1), rng.randint(0, int(H * d) + 1)],
+        [W - rng.randint(0, int(W * d) + 1), rng.randint(0, int(H * d) + 1)],
+        [W - rng.randint(0, int(W * d) + 1), H - rng.randint(0, int(H * d) + 1)],
+        [rng.randint(0, int(W * d) + 1), H - rng.randint(0, int(H * d) + 1)],
+    ])
+    return cv2.getPerspectiveTransform(src, dst)
+
+
+def t_ink_reflection(images, rng=None):
+    """批量油墨反光：随机椭圆高光斑（对齐 CPU aug_ink_reflection；无参数项）。"""
+    B, C, H, W = images.shape
+    out = images.clone()
+    for i in range(B):
+        cx = rng.randint(int(W * 0.2), int(W * 0.8) + 1)
+        cy = rng.randint(int(H * 0.2), int(H * 0.8) + 1)
+        rx, ry = rng.randint(10, 41), rng.randint(10, 41)
+        mask = np.zeros((H, W), dtype=np.float32)
+        cv2.ellipse(mask, (cx, cy), (rx, ry), rng.randint(0, 361), 0, 360, 1.0, -1)
+        mask = cv2.GaussianBlur(mask, (21, 21), 0)
+        mask = np.clip(mask * rng.uniform(0.5, 1.5), 0, 1)
+        out[i] = torch.clamp(images[i] + torch.from_numpy(mask[None, ...] * 255.0).to(images.device),
+                             0, 255)
+    return out
 
 
 # ---- GPU 几何：矩阵/网格（与 cv2 语义对齐） ----
@@ -456,6 +572,10 @@ class BatchSynthesizer:
                 if tp == "cutout":
                     params["w"] = random.randint(*params.pop("mask_size", (10, 100)))
                     params["n"] = random.randint(*params.pop("num_masks", (1, 3)))
+                    params["fill"] = params.pop("fill", "noise")   # 保留 color/noise
+                if tp == "motion_blur":
+                    params["length"] = random.randint(*params.pop("length", (5, 15)))
+                    params["angle"] = random.uniform(*params.pop("angle", (0, 180)))
                 ops.append({"type": tp, "params": params})
         return ops
 
@@ -522,17 +642,26 @@ class BatchSynthesizer:
             elif tp == "hsv":
                 d3 = torch.tensor([[p["value"]] * 3 for p in params]).to(images)
                 images[idxs] = t_hsv(sub, d3)
+            elif tp == "sharpness":
+                amt = torch.tensor([p.get("value", 1.0) for p in params]).to(images).view(-1, 1, 1, 1)
+                images[idxs] = t_sharpness(sub, amt, self._rng)
+            elif tp == "geometric":
+                images[idxs] = t_geometric(sub, [p.get("distortion", 0.1) for p in params],
+                                           self._rng)
             elif tp == "cutout":
-                rects, noises = [], []
+                rects, noises, fills = [], [], []
                 for p in params:
                     size = p["w"]
                     hh, ww = images.shape[2], images.shape[3]
                     x0 = random.randint(0, max(0, ww - size)); y0 = random.randint(0, max(0, hh - size))
                     rects.append((y0, min(hh, y0 + size), x0, min(ww, x0 + size)))
                     noises.append(1.0)
-                images = t_cutout(images, rects, torch.tensor(noises).to(images), self._rng)
-            elif tp == "geometric":
-                print("⚠️ geometric 在 P1 未启用（P4 补充）")
+                    fills.append(p.get("fill", "noise"))
+                images = t_cutout(images, rects, torch.tensor(noises).to(images),
+                                  self._rng, fills=fills)
+            elif tp == "motion_blur":
+                images[idxs] = t_motion_blur(sub, [p["length"] for p in params],
+                                             [p["angle"] for p in params], self._rng)
             else:
                 print(f"⚠️ 未知增强类型：{tp}，跳过")
         return images
@@ -587,7 +716,16 @@ class BatchSynthesizer:
                            "color": t_color}[op["type"]](img[:, :3].contiguous(), f)
                 img = torch.cat([rgb_new, img[:, 3:4]], dim=1)
             elif op["type"] == "sharpness":
-                pass      # P4 实现
+                img = torch.cat([t_sharpness(img[:, :3].contiguous(),
+                                             torch.tensor([op["params"]["value"]],
+                                                          device=img.device),
+                                             self._rng),
+                                 img[:, 3:4]], dim=1)
+            elif op["type"] == "motion_blur":
+                img = torch.cat([t_motion_blur(img[:, :3].contiguous(),
+                                               [op["params"]["length"]],
+                                               [op["params"]["angle"]], self._rng),
+                                 img[:, 3:4]], dim=1)
             else:
                 print(f"⚠️ target 菜单不支持的 op：{op['type']}")
         nw, nh = max(1, int(img.shape[3] * slot["s_init"])), max(1, int(img.shape[2] * slot["s_init"]))
@@ -741,6 +879,11 @@ class BatchSynthesizer:
             elif tp == "poisson":
                 it = torch.tensor([p["value"] for p in params]).to(images)
                 images[idxs] = t_poisson(sub, it, self._rng)
+            elif tp == "ink_reflection":
+                images[idxs] = t_ink_reflection(sub, self._rng)
+            elif tp == "motion_blur":
+                images[idxs] = t_motion_blur(sub, [p["length"] for p in params],
+                                             [p["angle"] for p in params], self._rng)
             else:
                 print(f"⚠️ final 未适配类型：{tp}")
         return images
