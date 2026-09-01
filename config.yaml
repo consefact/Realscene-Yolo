@@ -13,12 +13,12 @@ classes: [pillbox, tent, tank, car, bridge, cross, H]
 # 路径（相对项目根；也可写绝对路径）
 # ---------------------------------------------------------------------------
 paths:
-  backgrounds:  ./delivery-3/backgrounds      # 背景图目录（realscene 的底图）
-  synth_output: ./delivery-3/train_output     # realscene/multi_rs 合成结果（图+标注）
-  dataset:      ./delivery-3/HDATASET         # organize 输出 / 训练数据集根
-  check_output: ./delivery-3/check_samples    # 可视化检查输出
+  backgrounds:  ./delivery-4/backgrounds      # 背景图目录（realscene 的底图）
+  synth_output: ./delivery-4/train_output     # realscene/multi_rs 合成结果（图+标注）
+  dataset:      ./delivery-4/HDATASET         # organize 输出 / 训练数据集根
+  check_output: ./delivery-4/check_samples    # 可视化检查输出
   yolo_runs:    ./yolo_run               # 训练 project 目录
-  base_weights: yolo26n.pt               # 训练起始权重
+  base_weights: yolo26s.pt               # 训练起始权重
 
 # ---------------------------------------------------------------------------
 # 合成 + 自动标注（realscene.py / multi_rs.py 共用）
@@ -40,7 +40,7 @@ synth:
   to_border: 1.0e-6                # 归一化坐标的边界安全距离
   jpeg_quality: 95                 # 合成图输出 JPEG 质量
   backend: gpu                     # gpu（单进程批量张量）| cpu（realscene/multi_rs）| auto（有CUDA则gpu）
-  gpu_batch: 32                    # GPU 引擎每批合成图数（显存/吞吐折中；4000 系建议 32-64）
+  gpu_batch: 64                    # GPU 引擎每批合成图数（显存/吞吐折中；4000 系建议 32-64）
   gpu_jpeg_workers: 4              # GPU 引擎 JPEG 保存线程数
   num_workers: 1                   # 1 → 用 realscene.py（单进程）；>1 → 用 multi_rs.py（多进程）
   profile: ./profiles/delivery-2_aug.yaml                    # 可选：校准工具生成的增强覆盖 YAML（tools/calibrate_augment_profile.py），
@@ -59,7 +59,7 @@ synth:
         - {type: color,       prob: 0.5, range: [0.5, 1.5]}
         - {type: hsv,         prob: 0.5, delta: 0.1}
         # cutout 可选 fill: noise（默认，随机噪声）| color（随机纯色块，模拟彩色遮挡）
-        - {type: cutout,      prob: 0.5, mask_size: [50, 100], num_masks: [1, 5]}
+        - {type: cutout,      prob: 0.5, mask_size: [80, 150], num_masks: [2, 5], fill: color}
         - {type: geometric,   prob: 0.0, distortion: 0.1}   # 默认关闭（透视增强，开启可能改边框特征）
     target:                        # 目标增强（贴入前，RGB 部分，alpha 保持不变）
       menu:
@@ -87,20 +87,20 @@ synth:
     # ---- 5 类（bridge/car/pillbox/tank/tent）：环 + 中心识别区 ----
     # 贴图=完整环+中心（环保留作上下文），打框=中心识别区（label_dir=inner）
     ring_center:
-      dir: ./delivery/target/ring       # 环+中心完整图（每类一张，flat 文件名=类名）
-      label_dir: ./delivery/target/inner   # 打框 alpha：仅中心识别区（与 ring 同画布）
-      scale: [0.3, 1.2]             # 目标初始缩放范围
+      dir: ./delivery-4/target/ring       # 环+中心完整图（每类一张，flat 文件名=类名）
+      label_dir: ./delivery-4/target/inner   # 打框 alpha：仅中心识别区（与 ring 同画布）
+      scale: [0.7, 1.2]             # 目标初始缩放范围
       rotate: [-180, 180]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
       perspective: [0.5, 0.20]      # [prob, distortion] 透视形变(模拟相机畸变/倾斜视角)：
                                     # 50% 概率、四角独立扰动 ±10% 最短边；null=关闭。标注仍紧贴变形后物体
       feather: 4                     # 边缘羽化半径(px)（消灭抠图硬边；0=关闭）
       crop_transparent: true         # 贴入前裁掉 alpha=0 的透明边距（紧框更准）
     # ---- H/cross：无外周靶标，整图即目标（roi: null）----
-    # 单独目录（只含 H/cross）；delivery-3/target 里混着 5 类的中心图，不能直接引用
+    # 单独目录（只含 H/cross）；delivery-4/target 里混着 5 类的中心图，不能直接引用
     h_and_cross:
-      dir: ./delivery/target/h_direct
+      dir: ./delivery-4/target/h_direct
       roi: null                      # 整图即目标（H/cross 本身即中心识别区，无环）
-      scale: [0.3, 1.2]
+      scale: [0.8, 1.2]
       rotate: [-180, 180]
       perspective: [0.5, 0.20]
       feather: 4
@@ -134,26 +134,26 @@ check:
 train:
   epochs: 200
   imgsz: 640                       # 训练/推理尺寸（与导出 ONNX、X-AnyLabeling 推理保持一致）
-  batch: 128
+  batch: 64
   workers: 4
   dropout: 0.5
   patience: 40
   optimizer: MuSGD               # YOLO26的官方指定优化器，结合了SGD和Muon的优点，效果出色
   lr0: 0.001
   save_period: 10
-  run_name: delivery-3            # 训练结果子目录名（yolo_runs/<run_name>）
+  run_name: delivery-4            # 训练结果子目录名（yolo_runs/<run_name>）
 
 # ---------------------------------------------------------------------------
 # 微调（finetune.py：从 best.pt 出发，混入实拍标注数据继续训，避免灾难性遗忘）
 # 前置：实拍图需已标注（可先用 quick_test.py --save-labels 预标注再人工纠正）
 # ---------------------------------------------------------------------------
 finetune:
-  real_dir: ./delivery-3/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
+  real_dir: ./delivery-4/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
   oversample: 5                    # 实拍图在训练集里的重复倍数（少量真实数据加权）
   epochs: 200
   lr0: 0.001                       # 小学习率，避免冲垮预训练权重
   freeze: 0                        # 冻结前 N 层（0=不冻结；实拍很少可试 10）
-  run_name: delivery-3_ft         # 微调输出子目录（不覆盖原 best.pt）
+  run_name: delivery-4_ft         # 微调输出子目录（不覆盖原 best.pt）
 
 # ---------------------------------------------------------------------------
 # 采集（run.py 自动连拍 / manual_shot.py 手动拍）
