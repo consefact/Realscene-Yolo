@@ -112,7 +112,9 @@ def aug_hsv(img, delta=0.1):
     return cv2.cvtColor((hsv * 255).astype(np.uint8), cv2.COLOR_HSV2RGB)
 
 
-def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5)):
+def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5), fill="noise"):
+    """随机矩形遮挡。fill='noise' 填随机噪声；fill='color' 填随机纯色（模拟彩色遮挡块）。
+    fill='color' 每块一个独立随机色，对齐 realscene.py / 4.py 的色块增强。"""
     out = img.copy()
     h, w = out.shape[:2]
     ms = max(4, min(w, h) // 4)
@@ -120,7 +122,11 @@ def aug_cutout(img, mask_size=(50, 100), num_masks=(1, 5)):
         size = random.randint(mask_size[0], min(mask_size[1], ms))
         x = random.randint(0, max(0, w - size))
         y = random.randint(0, max(0, h - size))
-        out[y:y + size, x:x + size] = np.random.randint(0, 256, (size, size, 3), dtype=np.uint8)
+        if fill == "color":
+            color = np.random.randint(0, 256, 3, dtype=np.uint8)
+            out[y:y + size, x:x + size] = color[None, None, :]
+        else:
+            out[y:y + size, x:x + size] = np.random.randint(0, 256, (size, size, 3), dtype=np.uint8)
     return out
 
 
