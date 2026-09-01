@@ -221,7 +221,10 @@ def t_color(img, factors):
 
 
 def t_hsv(img, deltas):
-    """HSV 扰动（float 归一化空间；H 0-1 环、S/V 0-1）。deltas: [N,3] (±幅度)。"""
+    """HSV 扰动（float 归一化空间；H 0-1 环、S/V 0-1）。deltas: [N,3] (±幅度)。
+    H/S 扰动幅度按像素原饱和度缩放——灰色/低饱和像素（S≈0）保持灰
+    （低饱和像素的 H 对微噪声极不稳定，加性扰动会渲染成随机色相如紫色），
+    彩色像素获得完整 hsv 增强；V（明度）保持加性。"""
     x = img.clamp(0, 255) / 255.0
     r, g, b = x[:, 0], x[:, 1], x[:, 2]
     mx = x.max(dim=1).values
@@ -235,8 +238,8 @@ def t_hsv(img, deltas):
     s = torch.where(d > 0, d / mx.clamp(min=1e-8), torch.zeros_like(mx))
     v = mx
     dh, ds, dv = deltas[:, 0], deltas[:, 1], deltas[:, 2]
-    h = (h + dh.view(-1, 1, 1)) % 1.0
-    s = (s + ds.view(-1, 1, 1)).clamp(0, 1)
+    h = (h + (dh.view(-1, 1, 1) * s)) % 1.0     # H 扰动 ∝ 原饱和度
+    s = (s + ds.view(-1, 1, 1) * s).clamp(0, 1)  # S 扰动 ∝ 原饱和度
     v = (v + dv.view(-1, 1, 1)).clamp(0, 1)
     hi = (h * 6.0).floor() % 6
     f = h * 6.0 - (h * 6.0).floor()

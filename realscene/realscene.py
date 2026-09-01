@@ -98,8 +98,15 @@ def aug_sharpness(img, range_):
 
 
 def aug_hsv(img, delta=0.1):
+    """HSV 扰动（H/S/V 各 ±delta）。H/S 扰动幅度按像素原饱和度缩放——
+    灰色/低饱和像素（S≈0）保持灰（避免灰色地面被渲染成随机色相如紫色），
+    彩色像素获得完整 hsv 增强。"""
     hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32) / 255.0
-    hsv = np.clip(hsv + np.random.uniform(-delta, delta, 3), 0, 1)
+    s_orig = hsv[:, :, 1]
+    dh, ds, dv = np.random.uniform(-delta, delta, 3)
+    hsv[:, :, 0] = (hsv[:, :, 0] + dh * s_orig) % 1.0
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] + ds * s_orig, 0, 1)
+    hsv[:, :, 2] = np.clip(hsv[:, :, 2] + dv, 0, 1)
     return cv2.cvtColor((hsv * 255).astype(np.uint8), cv2.COLOR_HSV2RGB)
 
 
