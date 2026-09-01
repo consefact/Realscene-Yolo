@@ -26,7 +26,7 @@ paths:
 synth:
   base_size: [640, 480]            # 输出图尺寸（YOLO 训练尺寸）
   num_rounds: 100                 # 生成轮数
-  epochs: 2000                       # 总轮数（每 epoch 复用一遍全部目标крп；数据量≈epochs×每轮图数）（先小规模验证，再放量）
+  epochs: 2                       # 总轮数（每 epoch 复用一遍全部目标крп；数据量≈epochs×每轮图数）（先小规模验证，再放量）
   num_targets_per_image: 5         # 每张图最多贴几个目标
   target_repeat: 30                 # 每个目标每 epoch 复用次数。单/少图实例模式（每类只有一张/几张）时调大
                                    # 直接放大数据量：如 1 类 1 图、每图贴 3 个 → repeat 20 ≈ 单 epoch 产出 7 张
