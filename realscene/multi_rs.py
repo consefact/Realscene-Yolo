@@ -15,6 +15,7 @@ while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT,
     _ROOT = os.path.dirname(_ROOT)
 sys.path.insert(0, _ROOT)
 from config import load_config
+from edge_util import find_anchor, visible_rect, clamp_norm_bbox   # 同目录共享模块
 CFG = load_config()
 
 # 路径
@@ -34,6 +35,11 @@ MAX_TARGET_RATIO = _S.max_target_ratio
 MAX_TARGET_FAILURE = _S.max_target_failure
 MAX_OVERLAP_ATTEMPTS = _S.max_overlap_attempts
 TO_BORDER = float(_S.to_border)             # 边界安全距离
+# 边缘残缺 [prob, max_frac]：每目标 prob 概率允许部分越出画布（贴边被裁），
+# max_frac=越界量相对目标自身宽/高的最大比例；保底可见 ≥30% 自身，否则重采样
+EDGE_CLIP = _S.get("edge_clip", [0.0, 0.4])
+EDGE_CLIP_PROB = max(0.0, min(1.0, float(EDGE_CLIP[0])))
+EDGE_CLIP_FRAC = max(0.0, float(EDGE_CLIP[1]))
 NUM_ROUNDS = _S.num_rounds
 TARGET_REPEAT = max(1, int(_S.get("target_repeat", 1)))  # 每个目标每 epoch 复用次数（少图场景放大数据量）
 JPEG_QUALITY = int(_S.get("jpeg_quality", 95))
@@ -48,6 +54,13 @@ AUG_MENUS = dict(_S.get("aug", {}))
 TARGET_TYPES = dict(_S.target_types)
 TARGET_ROI = {t: (list(spec["roi"]) if spec.get("roi") else None)
               for t, spec in TARGET_TYPES.items()}
+# label_dir（可选）：与 dir 同布局的"打框 alpha"图目录——标注紧框取自其 alpha，
+# 而非贴图 alpha；透视/旋转后仍贴合内容（单应变换不保比例，ROI 会漂移）。
+TARGET_LABEL_DIR = {t: (spec.get("label_dir") or None) for t, spec in TARGET_TYPES.items()}
+# 配了 label_dir 的类型：ROI 失效（label alpha 直接定义打框区域）
+for _t, _ld in TARGET_LABEL_DIR.items():
+    if _ld:
+        TARGET_ROI[_t] = None
 TARGET_SCALE = {t: tuple(spec.get("scale", [0.5, 1.0])) for t, spec in TARGET_TYPES.items()}
 TARGET_ROTATE = {t: tuple(spec.get("rotate", [-45, 45])) for t, spec in TARGET_TYPES.items()}
 # 透视形变 [prob, distortion]：概率触发、四角扰动 ±distortion*min(w,h)；null=关闭
@@ -140,8 +153,17 @@ def aug_perspective(img, distortion=0.1):
     dst = np.float32([[r(), r()], [w + r(), r()], [w + r(), h + r()], [r(), h + r()]])
     m = cv2.getPerspectiveTransform(src, dst)
     rgb = cv2.warpPerspective(img[:, :, :3], m, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
-    alpha = cv2.warpPerspective(img[:, :, 3], m, (w, h), flags=cv2.INTER_NEAREST, borderValue=0)
-    return np.dstack([rgb, alpha])
+    # 5 通道（RGBA + 打框 alpha）同步变换；cv2 对 (H,W,1) 返回 2 维，需还原
+    if img.shape[2] > 3:
+        rest = img[:, :, 3:]
+        if rest.shape[2] == 1:
+            rest = cv2.warpPerspective(rest[:, :, 0], m, (w, h),
+                                       flags=cv2.INTER_NEAREST, borderValue=0)[:, :, None]
+        else:
+            rest = cv2.warpPerspective(rest, m, (w, h),
+                                       flags=cv2.INTER_NEAREST, borderValue=0)
+        return np.dstack([rgb, rest])
+    return rgb
 
 
 def aug_geometric(img, distortion=0.1):
@@ -221,13 +243,13 @@ def apply_aug_menu(img, menu_def):
             if func is None:
                 print(f"⚠️ 未知增强类型：{item['type']}，跳过")
                 continue
-            is_rgba = img.ndim == 3 and img.shape[2] == 4
+            is_rgba = img.ndim == 3 and img.shape[2] >= 4
             if is_rgba:
-                rgb, alpha = img[:, :, :3].copy(), img[:, :, 3]
+                rgb, rest = img[:, :, :3].copy(), img[:, :, 3:]
                 rgb = func(rgb, **kwargs)
                 if item["type"] == "flip":
-                    alpha = alpha[:, ::-1].copy()
-                img = np.dstack([rgb, alpha])
+                    rest = rest[:, ::-1].copy()
+                img = np.dstack([rgb, rest])
             else:
                 img = func(img, **kwargs)
     return img
@@ -252,8 +274,9 @@ def _build_edge_feather_alpha(w, h, radius):
 
 
 def _crop_transparent(img, room=0):
-    """裁掉 alpha=0 的透明边距（保留 room px 余量）。返回裁剪后图；无透明边距则原样。"""
-    if img.shape[2] != 4:
+    """裁掉 alpha=0 的透明边距（保留 room px 余量）。返回裁剪后图；无透明边距则原样。
+    5 通道（RGBA + 打框 alpha）：以贴图 alpha 的 bbox 裁剪，各通道同步。"""
+    if img.shape[2] not in (4, 5):
         return img
     a = img[:, :, 3]
     if a.all() or not a.any():
@@ -275,8 +298,10 @@ def _alpha_bbox(alpha):
 def _rotate_rgba(img, angle):
     """旋转 RGBA（RGB 双线性、alpha 邻近），返回 (旋转后图, 紧致 bbox 或 None)。
     紧框 = 旋转后 alpha>0 的真实内容包围盒（透明圆角/不规则底图也贴边）。"""
+    has_label = img.shape[2] >= 5
     if abs(angle) < 0.01:
-        return img, _alpha_bbox(img[:, :, 3])
+        label = img[:, :, 4] if has_label else img[:, :, 3]
+        return img, _alpha_bbox(label)
     h, w = img.shape[:2]
     cos_a, sin_a = abs(np.cos(np.radians(angle))), abs(np.sin(np.radians(angle)))
     # 消除 cos(90°)≈6e-17 类浮点误差：接近整值(0/1)时钳位
@@ -290,9 +315,16 @@ def _rotate_rgba(img, angle):
     m[0, 2] += (max_w - w) / 2.0
     m[1, 2] += (max_h - h) / 2.0
     rgb = cv2.warpAffine(img[:, :, :3], m, (max_w, max_h), flags=cv2.INTER_LINEAR, borderValue=0)
-    alpha = cv2.warpAffine(img[:, :, 3], m, (max_w, max_h), flags=cv2.INTER_NEAREST, borderValue=0)
-    # 紧框：以 alpha 内容为准（而非整图四角——那必然等于 expand 画布）
-    return np.dstack([rgb, alpha]), _alpha_bbox(alpha)
+    # 紧框优先取打框 alpha（通道 4，若存在），否则贴图 alpha；cv2 对 (H,W,1) 会返回 2 维，需还原
+    has_label = img.shape[2] >= 5
+    rest = img[:, :, 3:]
+    if rest.shape[2] == 1:
+        rest = cv2.warpAffine(rest[:, :, 0], m, (max_w, max_h),
+                              flags=cv2.INTER_NEAREST, borderValue=0)[:, :, None]
+    else:
+        rest = cv2.warpAffine(rest, m, (max_w, max_h), flags=cv2.INTER_NEAREST, borderValue=0)
+    label = rest[:, :, 1] if has_label else rest[:, :, 0]
+    return np.dstack([rgb, rest]), _alpha_bbox(label)
 
 
 def random_crop(image_path):
@@ -337,6 +369,7 @@ def load_target_images():
     IMG_EXT = ('.png', '.jpg', '.jpeg')
 
     for target_dir, target_type in dir_type_map:
+        label_dir = TARGET_LABEL_DIR.get(target_type)
         dir_classes, file_classes = [], []
         for entry in sorted(os.listdir(target_dir)):
             full = os.path.join(target_dir, entry)
@@ -358,6 +391,18 @@ def load_target_images():
         def add_image(path, category):
             try:
                 img = np.array(Image.open(path).convert("RGBA"))
+                if label_dir:
+                    # 同画布打框图：相对目标目录 <n> 的部分 → label_dir/<n>
+                    rel = os.path.relpath(path, target_dir)
+                    lp = os.path.join(label_dir, rel)
+                    if not os.path.exists(lp):
+                        print(f"  ⚠️ 缺打框图：{lp}，跳过 {path}")
+                        return
+                    lab = np.array(Image.open(lp).convert("RGBA"))
+                    if lab.shape != img.shape:
+                        print(f"  ⚠️ 打框图与贴图尺寸不一致：{lp} {lab.shape[:2]} vs {img.shape[:2]}，跳过")
+                        return
+                    img = np.dstack([img, lab[:, :, 3]])   # 5 通道
                 if TARGET_CROP_TRANSPARENT.get(target_type, True):
                     img = _crop_transparent(img)
                 class_id = class_names.index(category)
@@ -417,40 +462,37 @@ def place_target(base, target_tuple, placed_bboxes):
     bh, bw = base_rgba.shape[:2]
     th, tw = target.shape[:2]
 
-    # 超出画布直接放弃
+    # 超出画布直接放弃（边缘残缺靠放宽放置范围实现，不放宽目标尺寸）
     if tw > bw or th > bh:
         return base, None
 
-    placed = False
-    for _ in range(MAX_OVERLAP_ATTEMPTS * 2):
-        x = random.randint(0, bw - tw)
-        y = random.randint(0, bh - th)
-
-        overlap = False
-        safe_margin = max(tw, th) * 0.1
-        for bbox in placed_bboxes:
-            dx = max(0, abs((x + tw / 2) - (bbox['x'] + bbox['width'] / 2)) - (tw + bbox['width']) / 2)
-            dy = max(0, abs((y + th / 2) - (bbox['y'] + bbox['height'] / 2)) - (th + bbox['height']) / 2)
-            if dx < safe_margin and dy < safe_margin:
-                overlap = True
-                break
-        if not overlap:
-            placed = True
-            break
-
-    if not placed:
+    res = find_anchor(bw, bh, tw, th, placed_bboxes, EDGE_CLIP_PROB, EDGE_CLIP_FRAC,
+                      MAX_OVERLAP_ATTEMPTS * 2)
+    if res is None:
         return base, None
+    x, y, _edge = res
+    vis = visible_rect(bw, bh, x, y, tw, th)
+    # 极巧合（紧框全出画布）再挡一层
+    if _edge and tight:
+        tv = visible_rect(bw, bh, x + tight[0], y + tight[1],
+                          tight[2] - tight[0], tight[3] - tight[1], 0.0)
+        if tv is None:
+            return base, None
+    ix0, iy0, ix1, iy1 = vis
+    sx0, sy0 = ix0 - x, iy0 - y
+    ih, iw = iy1 - iy0, ix1 - ix0          # 可见交集尺寸
 
-    # 相邻区域 alpha 融合（含边缘羽化）
+    # 相邻区域 alpha 融合（含边缘羽化；交集切片，残缺目标保留画布内部分）
     alpha = target[:, :, 3].astype(np.float32)
     feather = TARGET_FEATHER.get(target_type, 0)
     if feather > 0:
         alpha = alpha * _build_edge_feather_alpha(tw, th, feather).astype(np.float32) / 255.0
+    alpha = alpha[sy0:sy0 + ih, sx0:sx0 + iw]
     alpha = np.clip(alpha, 0, 255).astype(np.float32) / 255.0
-    region = base_rgba[y:y + th, x:x + tw].astype(np.float32)
-    src = target[:, :, :3].astype(np.float32)
+    region = base_rgba[iy0:iy1, ix0:ix1].astype(np.float32)
+    src = target[sy0:sy0 + ih, sx0:sx0 + iw, :3].astype(np.float32)
     blended = alpha[..., None] * src + (1.0 - alpha[..., None]) * region
-    base_rgba[y:y + th, x:x + tw] = np.clip(blended, 0, 255).astype(np.uint8)
+    base_rgba[iy0:iy1, ix0:ix1] = np.clip(blended, 0, 255).astype(np.uint8)
 
     # 检测框：紧框目标用物体真实范围（相对粘贴画布），否则整张
     if tight:
@@ -615,18 +657,23 @@ def process_round(args):
             width_norm = abs_w / BASE_SIZE[0]
             height_norm = abs_h / BASE_SIZE[1]
 
-            # 边界修正
-            x_min = max(0.0 + TO_BORDER, x_center - width_norm / 2)
-            x_max = min(1.0 - TO_BORDER, x_center + width_norm / 2)
-            y_min = max(0.0 + TO_BORDER, y_center - height_norm / 2)
-            y_max = min(1.0 - TO_BORDER, y_center + height_norm / 2)
+            # 边界修正（clamp + 病态防御：全越界/碎屑框 → None 丢弃该目标）
+            clipped = clamp_norm_bbox(x_center, y_center, width_norm, height_norm, TO_BORDER)
+            if clipped is None:
+                shared_manager.release_target(target_idx)
+                used_in_round.remove(target_idx)
+                failed_attempts += 1
+                if failed_attempts >= MAX_TARGET_FAILURE:
+                    break
+                continue
+            x_center, y_center, width_norm, height_norm = clipped
 
             bboxes.append({
                 "class_id": class_id,
-                "x_center": (x_min + x_max) / 2,
-                "y_center": (y_min + y_max) / 2,
-                "width": x_max - x_min,
-                "height": y_max - y_min
+                "x_center": x_center,
+                "y_center": y_center,
+                "width": width_norm,
+                "height": height_norm
             })
             failed_attempts = 0
         else:

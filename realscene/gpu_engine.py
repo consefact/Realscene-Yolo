@@ -26,6 +26,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 from config import load_config
+from edge_util import find_anchor, visible_rect, clamp_norm_bbox   # 同目录共享模块
 
 IMG_EXT = (".png", ".jpg", ".jpeg")
 
@@ -33,6 +34,12 @@ IMG_EXT = (".png", ".jpg", ".jpeg")
 # ============================================================================
 # 配置提取（与 realscene.py 顶部同义）
 # ============================================================================
+def _edge_clip(_S):
+    """提取并夹取 edge_clip：[prob(0-1), max_frac(≥0)]，缺省关闭。"""
+    ec = _S.get("edge_clip", [0.0, 0.4])
+    return max(0.0, min(1.0, float(ec[0]))), max(0.0, float(ec[1]))
+
+
 def extract_synth_cfg(cfg):
     _S = cfg.synth
     out = {
@@ -49,6 +56,9 @@ def extract_synth_cfg(cfg):
         "MAX_TARGET_FAILURE": _S.max_target_failure,
         "MAX_OVERLAP_ATTEMPTS": _S.max_overlap_attempts,
         "TO_BORDER": float(_S.to_border),
+        # 边缘残缺 [prob, max_frac]：每目标 prob 概率允许部分越出画布（贴边被裁），
+        # max_frac=越界量相对目标自身宽/高的最大比例；保底可见 ≥30% 自身，否则重采样
+        "EDGE_CLIP": _edge_clip(_S),
         "JPEG_QUALITY": int(_S.get("jpeg_quality", 95)),
         "AUG_MENUS": dict(_S.get("aug", {})),
         "TARGET_TYPES": dict(_S.target_types),
@@ -803,31 +813,29 @@ class BatchSynthesizer:
         tw, th = w, h
         if tw > W or th > H:
             return None, False
-        for _ in range(self.sc["MAX_OVERLAP_ATTEMPTS"] * 2):
-            x = random.randint(0, W - tw)
-            y = random.randint(0, H - th)
-            ok = True
-            safe = max(tw, th) * 0.1
-            for b in placed_bboxes:
-                dx = max(0, abs((x + tw / 2) - (b["x"] + b["width"] / 2)) - (tw + b["width"]) / 2)
-                dy = max(0, abs((y + th / 2) - (b["y"] + b["height"] / 2)) - (th + b["height"]) / 2)
-                if dx < safe and dy < safe:
-                    ok = False
-                    break
-            if ok:
-                break
-        else:
+        res = find_anchor(W, H, tw, th, placed_bboxes,
+                          self.sc["EDGE_CLIP"][0], self.sc["EDGE_CLIP"][1],
+                          self.sc["MAX_OVERLAP_ATTEMPTS"] * 2)
+        if res is None:
             return None, False
-        # GPU paste（feather）
+        x, y, _edge = res
+        ix0, iy0, ix1, iy1 = visible_rect(W, H, x, y, tw, th)
+        sx0, sy0 = ix0 - x, iy0 - y
+        ih, iw = iy1 - iy0, ix1 - ix0          # 可见交集尺寸
+        # GPU paste（feather；交集切片，残缺目标保留画布内部分）
+        # a 保持 3 维 (1,th,tw)（与 src (3,th,tw) 同坐标布局，按 [y,x] 切片交集）
         feather = self.sc["TARGET_FEATHER"].get(ttype, 0)
-        a = al_o[:, 0]
+        a = al_o[:, 0]                                   # (1, th, tw)
         if feather > 0:
-            a = a * _feather_alpha_tensor(th, tw, feather, a.device).squeeze(0)
-        a = (a / 255.0).clamp(0, 1).unsqueeze(0)
+            ft = _feather_alpha_tensor(th, tw, feather, a.device).squeeze(0)  # (1,h,w)
+            a = a * ft                                   # (1, th, tw)
+        a = (a / 255.0).clamp(0, 1)                      # (1, th, tw)
         src = rgb_o[0]
-        reg = img_tensor[0, :, y:y + th, x:x + tw]
-        blended = a * src + (1.0 - a) * reg
-        img_tensor[0, :, y:y + th, x:x + tw] = blended
+        a_s = a[:, sy0:sy0 + ih, sx0:sx0 + iw]           # (1, ih, iw)
+        src_s = src[:, sy0:sy0 + ih, sx0:sx0 + iw]       # (3, ih, iw)
+        reg = img_tensor[0, :, iy0:iy1, ix0:ix1]         # (3, ih, iw)
+        blended = a_s * src_s + (1.0 - a_s) * reg        # 广播 → (3, ih, iw)
+        img_tensor[0, :, iy0:iy1, ix0:ix1] = blended
         placed_bboxes.append({"x": x, "y": y, "width": tw, "height": th})
         return {"x": x, "y": y, "w": tw, "h": th}, True
 
@@ -850,10 +858,12 @@ class BatchSynthesizer:
         yc = (abs_y + abs_h / 2) / H
         wn = abs_w / W; hn = abs_h / H
         tb = self.sc["TO_BORDER"]
-        x_min = max(0.0 + tb, xc - wn / 2); x_max = min(1.0 - tb, xc + wn / 2)
-        y_min = max(0.0 + tb, yc - hn / 2); y_max = min(1.0 - tb, yc + hn / 2)
-        return f"{cid} {(x_min + x_max) / 2:.6f} {(y_min + y_max) / 2:.6f} " \
-               f"{x_max - x_min:.6f} {y_max - y_min:.6f}"
+        # clamp + 病态防御（全越界/碎屑框 → None，调用方不写该行）
+        clipped = clamp_norm_bbox(xc, yc, wn, hn, tb)
+        if clipped is None:
+            return None
+        xc, yc, wn, hn = clipped
+        return f"{cid} {xc:.6f} {yc:.6f} {wn:.6f} {hn:.6f}"
 
     def compose_plan(self, bg_tensor, plan, used_targets, epoch):
         """单图完整合成：返回 (image_tensor[1,3,H,W], labels[list[str]])。"""
@@ -891,7 +901,9 @@ class BatchSynthesizer:
             bboxes = _alpha_bboxes_batch(stack)
             for (a_o, rec, cid, ttype), bbs in zip(retained, bboxes):
                 # a 在 pad 后的坐标系：bbs 减 pad 偏移无影响（right/bottom pad：min 不变）
-                labels.append(self._make_label(rec, bbs, ttype, cid))
+                lb = self._make_label(rec, bbs, ttype, cid)
+                if lb is not None:
+                    labels.append(lb)
         return img, labels
 
     def _apply_final_menu(self, images, plans):

@@ -38,6 +38,11 @@ synth:
   max_target_failure: 8            # 单图放置失败上限
   max_overlap_attempts: 20         # 单目标找不重叠位置的尝试上限
   to_border: 1.0e-6                # 归一化坐标的边界安全距离
+  edge_clip: [0.0, 0.4]           # 目标边缘残缺 [prob, max_frac]：
+                                   #   prob：每个目标放置时触发"允许越界采样"的概率（0=关闭，向后兼容）
+                                   #   max_frac：越界量相对目标自身宽/高的最大比例，两轴各方向独立
+                                   #   保底：残缺目标可见宽/高 ≥30% 目标自身，否则换样重采样
+                                   #   （max_frac ≤0.7 时保底恒成立；取 0.9 可覆盖保底重采样路径）
   jpeg_quality: 95                 # 合成图输出 JPEG 质量
   backend: gpu                     # gpu（单进程批量张量）| cpu（realscene/multi_rs）| auto（有CUDA则gpu）
   gpu_batch: 32                    # GPU 引擎每批合成图数（显存/吞吐折中；4000 系建议 32-64）
