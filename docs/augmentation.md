@@ -104,7 +104,43 @@ config.yaml
 
 ---
 
-## 四、数据驱动校准（高级）
+## 四、边缘残缺增强（`edge_clip`）
+
+模拟真实相机画面里目标被镜头边缘裁切（部分可见、部分缺失，贴边残缺）。
+
+```yaml
+# config.yaml synth 段
+edge_clip: [0.3, 0.4]   # [prob, max_frac]
+```
+
+| 键 | 含义 |
+|---|---|
+| `prob` | 每个目标放置时触发"允许越界采样"的概率（0=关闭，向后兼容；示例 0.3） |
+| `max_frac` | 越界量相对**目标自身宽/高**的最大比例，两轴各方向独立 `uniform(0, max_frac*tw/th)` |
+
+**保底规则**：残缺目标可见宽/高必须 ≥ **30%** 目标自身，否则换样重采样（不会全越界/产生负宽标注）。
+数学上 `max_frac ≤ 0.7` 时保底**恒成立**（单侧可见 ≥ tw − max_frac·tw ≥ 0.3·tw），只有 `max_frac > 0.7`
+才真正触发重采样；取 `0.9` 可验证该路径。
+
+**行为说明**：
+- 触发越界采样时目标可能贴任一画布边缘被裁；未触发时目标完全在画布内（现状行为不变）
+- 残缺后的检测框**与可见部分一致**（标注 clamp 自动收缩到画布内）；全越界/碎屑框被丢弃不出标注
+- 所有目标类型一视同仁（环类、H/cross 均可残缺）
+- 三引擎（realscene / multi_rs / gpu_engine）行为一致；GPU 紧框批算晚，极罕见出现"已贴目标但
+  紧框整体出画布"的无标注幻影（CPU 路径有额外预检几乎消除），属已知特性
+- 放置失败率上升时（像 `max_frac=0.9` 极限）目标可能放不下，合成密度略降，属预期
+
+**验证命令**：
+```bash
+# 强制触发 + 保底重采样路径
+# config.yaml 设 edge_clip: [1.0, 0.9]，然后
+python realscene/gpu_synth.py --backend gpu --epochs 1 --batch 8
+# 检查：输出存在贴边被裁目标，且所有 .txt 无负宽/越界标注行
+```
+
+---
+
+## 五、数据驱动校准（高级）
 
 ```bash
 # 统计真实标注图的亮度/清晰度/噪声/压缩痕迹分布 → 推荐增强参数的 YAML
@@ -124,7 +160,7 @@ python tools/calibrate_augment_profile.py --mode compare \
 
 ---
 
-## 五、使用流程
+## 六、使用流程
 
 1. **改配置**：编辑 `config.yaml` 的 `synth.aug` 三段（`prob` 调触发率、`range/var/amount` 调强度）。
 2. **小规模验证**：`python realscene/gpu_synth.py --backend gpu --epochs 1`（几秒），
