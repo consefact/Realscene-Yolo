@@ -1,187 +1,187 @@
-# ============================================================================
-# 通用 YOLO 数据增强流水线 —— 唯一配置源
-# 换检测任务时，原则上只需改本文件，无需改任何脚本源码。
-# 所有相对路径都相对本文件所在目录（项目根）解析。
-# ============================================================================
+  # ============================================================================
+  # 通用 YOLO 数据增强流水线 —— 唯一配置源
+  # 换检测任务时，原则上只需改本文件，无需改任何脚本源码。
+  # 所有相对路径都相对本文件所在目录（项目根）解析。
+  # ============================================================================
 
-# 类别列表：唯一来源。列表下标即 YOLO 的 class_id。
-# 目标图片须按 `<目标目录>/<类名>/*.png` 组织，子文件夹名要与这里完全一致。
-# 下面即当前任务（7 类物体检测）的实例配置；换任务时改这里。
-classes: [pillbox, tent, tank, car, bridge, cross, H]
+  # 类别列表：唯一来源。列表下标即 YOLO 的 class_id。
+  # 目标图片须按 `<目标目录>/<类名>/*.png` 组织，子文件夹名要与这里完全一致。
+  # 下面即当前任务（7 类物体检测）的实例配置；换任务时改这里。
+  # classes: [pillbox, tent, tank, car, bridge, cross, H]
+  classes: [pillbox, tent, tank, car, bridge, cross, H]
+  # ---------------------------------------------------------------------------
+  # 路径（相对项目根；也可写绝对路径）
+  # ---------------------------------------------------------------------------
+  paths:
+    backgrounds:  ./delivery-5/backgrounds      # 背景图目录（realscene 的底图）
+    synth_output: ./delivery-5/train_output     # realscene/multi_rs 合成结果（图+标注）
+    dataset:      ./delivery-5/HDATASET         # organize 输出 / 训练数据集根
+    check_output: ./delivery-5/check_samples    # 可视化检查输出
+    yolo_runs:    ./yolo_run               # 训练 project 目录
+    base_weights: yolo26n.pt               # 训练起始权重
 
-# ---------------------------------------------------------------------------
-# 路径（相对项目根；也可写绝对路径）
-# ---------------------------------------------------------------------------
-paths:
-  backgrounds:  ./delivery-4/backgrounds      # 背景图目录（realscene 的底图）
-  synth_output: ./delivery-4/train_output     # realscene/multi_rs 合成结果（图+标注）
-  dataset:      ./delivery-4/HDATASET         # organize 输出 / 训练数据集根
-  check_output: ./delivery-4/check_samples    # 可视化检查输出
-  yolo_runs:    ./yolo_run               # 训练 project 目录
-  base_weights: yolo26s.pt               # 训练起始权重
+  # ---------------------------------------------------------------------------
+  # 合成 + 自动标注（realscene.py / multi_rs.py 共用）
+  # ---------------------------------------------------------------------------
+  synth:
+    base_size: [640, 480]            # 输出图尺寸（YOLO 训练尺寸）
+    num_rounds: 100                 # 生成轮数
+    epochs: 500                       # 总轮数（每 epoch 复用一遍全部目标крп；数据量≈epochs×每轮图数）（先小规模验证，再放量）
+    num_targets_per_image: 5         # 每张图最多贴几个目标
+    target_repeat: 30                 # 每个目标每 epoch 复用次数。单/少图实例模式（每类只有一张/几张）时调大
+                                    # 直接放大数据量：如 1 类 1 图、每图贴 3 个 → repeat 20 ≈ 单 epoch 产出 7 张
+    background_ratio: 0.05            # 空镜负样本比例：该比例的图不贴目标、标签为空（降低误检；0=关闭）
+    min_crop_ratio: 0.4              # 背景随机裁剪最小比例
+    max_crop_ratio: 0.9              # 背景随机裁剪最大比例
+    min_target_ratio: 0.1            # 目标占画布最小比例
+    max_target_ratio: 0.65            # 目标占画布最大比例
+    max_target_failure: 8            # 单图放置失败上限
+    max_overlap_attempts: 20         # 单目标找不重叠位置的尝试上限
+    to_border: 1.0e-6                # 归一化坐标的边界安全距离
+    jpeg_quality: 95                 # 合成图输出 JPEG 质量
+    backend: gpu                     # gpu（单进程批量张量）| cpu（realscene/multi_rs）| auto（有CUDA则gpu）
+    gpu_batch: 64                    # GPU 引擎每批合成图数（显存/吞吐折中；4000 系建议 32-64）
+    gpu_jpeg_workers: 4              # GPU 引擎 JPEG 保存线程数
+    num_workers: 1                   # 1 → 用 realscene.py（单进程）；>1 → 用 multi_rs.py（多进程）
+    profile: ./profiles/delivery-2_aug.yaml                    # 可选：校准工具生成的增强覆盖 YAML（tools/calibrate_augment_profile.py），
+                                    # 加载时与下面的 aug 段深合并（相对项目根）
 
-# ---------------------------------------------------------------------------
-# 合成 + 自动标注（realscene.py / multi_rs.py 共用）
-# ---------------------------------------------------------------------------
-synth:
-  base_size: [640, 480]            # 输出图尺寸（YOLO 训练尺寸）
-  num_rounds: 100                 # 生成轮数
-  epochs: 2                       # 总轮数（每 epoch 复用一遍全部目标крп；数据量≈epochs×每轮图数）（先小规模验证，再放量）
-  num_targets_per_image: 5         # 每张图最多贴几个目标
-  target_repeat: 30                 # 每个目标每 epoch 复用次数。单/少图实例模式（每类只有一张/几张）时调大
-                                   # 直接放大数据量：如 1 类 1 图、每图贴 3 个 → repeat 20 ≈ 单 epoch 产出 7 张
-  background_ratio: 0.05            # 空镜负样本比例：该比例的图不贴目标、标签为空（降低误检；0=关闭）
-  min_crop_ratio: 0.4              # 背景随机裁剪最小比例
-  max_crop_ratio: 0.9              # 背景随机裁剪最大比例
-  min_target_ratio: 0.1            # 目标占画布最小比例
-  max_target_ratio: 0.65            # 目标占画布最大比例
-  max_target_failure: 8            # 单图放置失败上限
-  max_overlap_attempts: 20         # 单目标找不重叠位置的尝试上限
-  to_border: 1.0e-6                # 归一化坐标的边界安全距离
-  jpeg_quality: 95                 # 合成图输出 JPEG 质量
-  backend: gpu                     # gpu（单进程批量张量）| cpu（realscene/multi_rs）| auto（有CUDA则gpu）
-  gpu_batch: 64                    # GPU 引擎每批合成图数（显存/吞吐折中；4000 系建议 32-64）
-  gpu_jpeg_workers: 4              # GPU 引擎 JPEG 保存线程数
-  num_workers: 1                   # 1 → 用 realscene.py（单进程）；>1 → 用 multi_rs.py（多进程）
-  profile: ./profiles/delivery-2_aug.yaml                    # 可选：校准工具生成的增强覆盖 YAML（tools/calibrate_augment_profile.py），
-                                   # 加载时与下面的 aug 段深合并（相对项目根）
+    # 增强菜单：每层一个菜单，每张图从菜单抽 num[0]~num[1] 种增强，抽完后以 extra_prob 再补一次。
+    # 项字段：type 必填；prob 触发概率；其余参数名随 type（range=[lo,hi] 统一为均匀采样）。
+    # 替换了旧式 apply_geometric_aug / apply_ink_reflection 开关——由菜单里的 prob 控制（0=关闭）。
+    aug:
+      base:                          # 背景增强（裁剪缩放到 base_size 之后、贴目标之前）
+        num: [2, 6]
+        extra_prob: 0.3
+        menu:
+          - {type: brightness, prob: 0.5, range: [0.6, 1.35]}
+          - {type: contrast,   prob: 0.5, range: [0.8, 1.2]}
+          - {type: color,       prob: 0.5, range: [0.5, 1.5]}
+          - {type: hsv,         prob: 0.5, delta: 0.1}
+          # cutout 可选 fill: noise（默认，随机噪声）| color（随机纯色块，模拟彩色遮挡）
+          - {type: cutout,      prob: 0.5, mask_size: [80, 150], num_masks: [2, 5], fill: color}
+          - {type: geometric,   prob: 0.0, distortion: 0.1}   # 默认关闭（透视增强，开启可能改边框特征）
+      target:                        # 目标增强（贴入前，RGB 部分，alpha 保持不变）
+        menu:
+          - {type: brightness, prob: 1.0, range: [0.7, 1.35]}
+          - {type: contrast,   prob: 1.0, range: [0.8, 1.2]}
+          - {type: sharpness,  prob: 0.25, range: [0.8, 1.2]}
+          - {type: color,      prob: 0.35, range: [0.5, 1.5]}
+          - {type: flip,       prob: 0.5}
+      final:                         # 整图噪声（贴完所有目标之后）
+        menu:
+          - {type: gaussian,      prob: 0.5, var: [1, 10]}
+          - {type: salt_pepper,   prob: 0.3, amount: [0.001, 0.005]}
+          - {type: poisson,       prob: 0.3, intensity: 0.1}
+          - {type: ink_reflection, prob: 0.0}                  # 默认关闭（油墨反光，需要时开启）
+          - {type: motion_blur,   prob: 0.3, length: [5, 15], angle: [0, 180]}  # 动态模糊（相机抖动拖影）
 
-  # 增强菜单：每层一个菜单，每张图从菜单抽 num[0]~num[1] 种增强，抽完后以 extra_prob 再补一次。
-  # 项字段：type 必填；prob 触发概率；其余参数名随 type（range=[lo,hi] 统一为均匀采样）。
-  # 替换了旧式 apply_geometric_aug / apply_ink_reflection 开关——由菜单里的 prob 控制（0=关闭）。
-  aug:
-    base:                          # 背景增强（裁剪缩放到 base_size 之后、贴目标之前）
-      num: [2, 6]
-      extra_prob: 0.3
-      menu:
-        - {type: brightness, prob: 0.5, range: [0.6, 1.35]}
-        - {type: contrast,   prob: 0.5, range: [0.8, 1.2]}
-        - {type: color,       prob: 0.5, range: [0.5, 1.5]}
-        - {type: hsv,         prob: 0.5, delta: 0.1}
-        # cutout 可选 fill: noise（默认，随机噪声）| color（随机纯色块，模拟彩色遮挡）
-        - {type: cutout,      prob: 0.5, mask_size: [80, 150], num_masks: [2, 5], fill: color}
-        - {type: geometric,   prob: 0.0, distortion: 0.1}   # 默认关闭（透视增强，开启可能改边框特征）
-    target:                        # 目标增强（贴入前，RGB 部分，alpha 保持不变）
-      menu:
-        - {type: brightness, prob: 1.0, range: [0.7, 1.35]}
-        - {type: contrast,   prob: 1.0, range: [0.8, 1.2]}
-        - {type: sharpness,  prob: 0.25, range: [0.8, 1.2]}
-        - {type: color,      prob: 0.35, range: [0.5, 1.5]}
-        - {type: flip,       prob: 0.5}
-    final:                         # 整图噪声（贴完所有目标之后）
-      menu:
-        - {type: gaussian,      prob: 0.5, var: [1, 10]}
-        - {type: salt_pepper,   prob: 0.3, amount: [0.001, 0.005]}
-        - {type: poisson,       prob: 0.3, intensity: 0.1}
-        - {type: ink_reflection, prob: 0.0}                  # 默认关闭（油墨反光，需要时开启）
-        - {type: motion_blur,   prob: 0.3, length: [5, 15], angle: [0, 180]}  # 动态模糊（相机抖动拖影）
+    # 目标类型：每类目标一个来源目录 + ROI/标注定义 + 缩放范围。
+    #   roi: null              → 整张目标图就是检测框（最常用）
+    #   roi: [rx, ry, rw, rh]  → 目标图是"底板"，只框内部 ROI（相对目标框的比例）
+    #   label_dir: <同布局目录> → "打框 alpha"图（与 dir 同相对路径/文件名，同画布），
+    #                            标注紧框取自该图 alpha——透视/旋转（单应）下框贴合内容，
+    #                            ROI 失效（label alpha 直接定义打框区域）。
+    # 可配置多个类型，realscene 会全部加载并混合使用。
+    target_types:
+      # ---- 5 类（bridge/car/pillbox/tank/tent）：环 + 中心识别区 ----
+      # 贴图=完整环+中心（环保留作上下文），打框=中心识别区（label_dir=inner）
+      ring_center:
+        dir: ./delivery-5/target/ring       # 环+中心完整图（每类一张，flat 文件名=类名）
+        label_dir: ./delivery-5/target/inner   # 打框 alpha：仅中心识别区（与 ring 同画布）
+        scale: [1, 1.2]             # 目标初始缩放范围
+        rotate: [-180, 180]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
+        perspective: [0.5, 0.20]      # [prob, distortion] 透视形变(模拟相机畸变/倾斜视角)：
+                                      # 50% 概率、四角独立扰动 ±10% 最短边；null=关闭。标注仍紧贴变形后物体
+        feather: 4                     # 边缘羽化半径(px)（消灭抠图硬边；0=关闭）
+        crop_transparent: true         # 贴入前裁掉 alpha=0 的透明边距（紧框更准）
+      # ---- H/cross：无外周靶标，整图即目标（roi: null）----
+      # 单独目录（只含 H/cross）；delivery-5/target 里混着 5 类的中心图，不能直接引用
+      h_and_cross:
+        dir: ./delivery-5/target/cross_direct
+        roi: null                      # 整图即目标（H/cross 本身即中心识别区，无环）
+        scale: [1.1, 1.2]
+        rotate: [-180, 180]
+        perspective: [0.5, 0.20]
+        feather: 4
+        crop_transparent: true
+      # ---- 底板 + ROI 示例（复现原 CIFAR 版的 34/32 内缩，可按需启用）----
+      # synthetic:
+      #   dir: ./synthetic_targets
+      #   roi: [0.34, 0.34, 0.32, 0.32]
+      #   scale: [0.5, 1.0]
+      # ---- 真实识别区裁剪图（整图即目标，缩放范围偏大）----
+      # original:
+      #   dir: ./original_targets
+      #   roi: null
+      #   scale: [0.8, 1.2]
 
-  # 目标类型：每类目标一个来源目录 + ROI/标注定义 + 缩放范围。
-  #   roi: null              → 整张目标图就是检测框（最常用）
-  #   roi: [rx, ry, rw, rh]  → 目标图是"底板"，只框内部 ROI（相对目标框的比例）
-  #   label_dir: <同布局目录> → "打框 alpha"图（与 dir 同相对路径/文件名，同画布），
-  #                            标注紧框取自该图 alpha——透视/旋转（单应）下框贴合内容，
-  #                            ROI 失效（label alpha 直接定义打框区域）。
-  # 可配置多个类型，realscene 会全部加载并混合使用。
-  target_types:
-    # ---- 5 类（bridge/car/pillbox/tank/tent）：环 + 中心识别区 ----
-    # 贴图=完整环+中心（环保留作上下文），打框=中心识别区（label_dir=inner）
-    ring_center:
-      dir: ./delivery-4/target/ring       # 环+中心完整图（每类一张，flat 文件名=类名）
-      label_dir: ./delivery-4/target/inner   # 打框 alpha：仅中心识别区（与 ring 同画布）
-      scale: [0.7, 1.2]             # 目标初始缩放范围
-      rotate: [-180, 180]              # 旋转角度范围（紧框：标注取旋转后真实物体轴对齐框）
-      perspective: [0.5, 0.20]      # [prob, distortion] 透视形变(模拟相机畸变/倾斜视角)：
-                                    # 50% 概率、四角独立扰动 ±10% 最短边；null=关闭。标注仍紧贴变形后物体
-      feather: 4                     # 边缘羽化半径(px)（消灭抠图硬边；0=关闭）
-      crop_transparent: true         # 贴入前裁掉 alpha=0 的透明边距（紧框更准）
-    # ---- H/cross：无外周靶标，整图即目标（roi: null）----
-    # 单独目录（只含 H/cross）；delivery-4/target 里混着 5 类的中心图，不能直接引用
-    h_and_cross:
-      dir: ./delivery-4/target/h_direct
-      roi: null                      # 整图即目标（H/cross 本身即中心识别区，无环）
-      scale: [0.8, 1.2]
-      rotate: [-180, 180]
-      perspective: [0.5, 0.20]
-      feather: 4
-      crop_transparent: true
-    # ---- 底板 + ROI 示例（复现原 CIFAR 版的 34/32 内缩，可按需启用）----
-    # synthetic:
-    #   dir: ./synthetic_targets
-    #   roi: [0.34, 0.34, 0.32, 0.32]
-    #   scale: [0.5, 1.0]
-    # ---- 真实识别区裁剪图（整图即目标，缩放范围偏大）----
-    # original:
-    #   dir: ./original_targets
-    #   roi: null
-    #   scale: [0.8, 1.2]
+  # ---------------------------------------------------------------------------
+  # 数据集切分（organize.py）
+  # ---------------------------------------------------------------------------
+  dataset:
+    val_ratio: 0.2                   # 验证集比例（train/val）
 
-# ---------------------------------------------------------------------------
-# 数据集切分（organize.py）
-# ---------------------------------------------------------------------------
-dataset:
-  val_ratio: 0.2                   # 验证集比例（train/val）
+  # ---------------------------------------------------------------------------
+  # 可视化检查（check/label/partial_check.py）
+  # ---------------------------------------------------------------------------
+  check:
+    num_samples: 50                  # partial_check 随机抽样可视化的数量
 
-# ---------------------------------------------------------------------------
-# 可视化检查（check/label/partial_check.py）
-# ---------------------------------------------------------------------------
-check:
-  num_samples: 50                  # partial_check 随机抽样可视化的数量
+  # ---------------------------------------------------------------------------
+  # 训练（y8train.py；dataset.yaml 由此自动生成）
+  # ---------------------------------------------------------------------------
+  train:
+    epochs: 200
+    imgsz: 640                       # 训练/推理尺寸（与导出 ONNX、X-AnyLabeling 推理保持一致）
+    batch: 64
+    workers: 4
+    dropout: 0.5
+    patience: 40
+    optimizer: MuSGD               # YOLO26的官方指定优化器，结合了SGD和Muon的优点，效果出色
+    lr0: 0.001
+    save_period: 10
+    run_name: delivery-5            # 训练结果子目录名（yolo_runs/<run_name>）
 
-# ---------------------------------------------------------------------------
-# 训练（y8train.py；dataset.yaml 由此自动生成）
-# ---------------------------------------------------------------------------
-train:
-  epochs: 200
-  imgsz: 640                       # 训练/推理尺寸（与导出 ONNX、X-AnyLabeling 推理保持一致）
-  batch: 64
-  workers: 4
-  dropout: 0.5
-  patience: 40
-  optimizer: MuSGD               # YOLO26的官方指定优化器，结合了SGD和Muon的优点，效果出色
-  lr0: 0.001
-  save_period: 10
-  run_name: delivery-4            # 训练结果子目录名（yolo_runs/<run_name>）
+  # ---------------------------------------------------------------------------
+  # 微调（finetune.py：从 best.pt 出发，混入实拍标注数据继续训，避免灾难性遗忘）
+  # 前置：实拍图需已标注（可先用 quick_test.py --save-labels 预标注再人工纠正）
+  # ---------------------------------------------------------------------------
+  finetune:
+    real_dir: ./delivery-5/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
+    oversample: 5                    # 实拍图在训练集里的重复倍数（少量真实数据加权）
+    epochs: 200
+    lr0: 0.001                       # 小学习率，避免冲垮预训练权重
+    freeze: 0                        # 冻结前 N 层（0=不冻结；实拍很少可试 10）
+    run_name: delivery-5_ft         # 微调输出子目录（不覆盖原 best.pt）
 
-# ---------------------------------------------------------------------------
-# 微调（finetune.py：从 best.pt 出发，混入实拍标注数据继续训，避免灾难性遗忘）
-# 前置：实拍图需已标注（可先用 quick_test.py --save-labels 预标注再人工纠正）
-# ---------------------------------------------------------------------------
-finetune:
-  real_dir: ./delivery-4/real           # 实拍标注数据：real/images + real/labels（或 flat 图+同名txt）
-  oversample: 5                    # 实拍图在训练集里的重复倍数（少量真实数据加权）
-  epochs: 200
-  lr0: 0.001                       # 小学习率，避免冲垮预训练权重
-  freeze: 0                        # 冻结前 N 层（0=不冻结；实拍很少可试 10）
-  run_name: delivery-4_ft         # 微调输出子目录（不覆盖原 best.pt）
+  # ---------------------------------------------------------------------------
+  # 采集（run.py 自动连拍 / manual_shot.py 手动拍）
+  # ---------------------------------------------------------------------------
+  capture:
+    save_dir: ./save_frame
+    class_name: nowclass             # manual_shot 分类子目录名（按需改）
+    camera_index: 0
+    frame_width: 640
+    frame_height: 480
+    auto_every_n: 5                  # run.py 每隔 N 帧存一张
 
-# ---------------------------------------------------------------------------
-# 采集（run.py 自动连拍 / manual_shot.py 手动拍）
-# ---------------------------------------------------------------------------
-capture:
-  save_dir: ./save_frame
-  class_name: nowclass             # manual_shot 分类子目录名（按需改）
-  camera_index: 0
-  frame_width: 640
-  frame_height: 480
-  auto_every_n: 5                  # run.py 每隔 N 帧存一张
+  # ---------------------------------------------------------------------------
+  # 内置"整图即目标"范例生成器（generate_letters.py，仅演示用）
+  # ---------------------------------------------------------------------------
+  generate_letters:
+    output_dir: ./letter_targets
+    num_per_class: 500
 
-# ---------------------------------------------------------------------------
-# 内置"整图即目标"范例生成器（generate_letters.py，仅演示用）
-# ---------------------------------------------------------------------------
-generate_letters:
-  output_dir: ./letter_targets
-  num_per_class: 500
-
-# ---------------------------------------------------------------------------
-# 内置"底板 + ROI"范例生成器（target/smooth_target.py，仅演示用）
-# 把 objects_dir/<类名>/*.png 里的识别区贴到底板中心，产出与上面 roi 对应的底板图。
-# ---------------------------------------------------------------------------
-smooth_target:
-  objects_dir: ./recognition_regions   # 识别区来源（按类分子目录）
-  real_targets_dir: none                # 真实空底板照片目录；none=用合成底板
-  output_dir: ./synthetic_targets       # 底板目标输出（对应某个 target_type.dir）
-  board_size: 100                       # 底板边长(px)
-  object_size: 32                       # 识别区缩放后边长(px)
-  paste_offset: 34                      # 识别区粘贴左上角偏移(px)；(board-object)/2 居中
-  prob_use_real: 1.0                    # 使用真实底板的概率（0~1）
+  # ---------------------------------------------------------------------------
+  # 内置"底板 + ROI"范例生成器（target/smooth_target.py，仅演示用）
+  # 把 objects_dir/<类名>/*.png 里的识别区贴到底板中心，产出与上面 roi 对应的底板图。
+  # ---------------------------------------------------------------------------
+  smooth_target:
+    objects_dir: ./recognition_regions   # 识别区来源（按类分子目录）
+    real_targets_dir: none                # 真实空底板照片目录；none=用合成底板
+    output_dir: ./synthetic_targets       # 底板目标输出（对应某个 target_type.dir）
+    board_size: 100                       # 底板边长(px)
+    object_size: 32                       # 识别区缩放后边长(px)
+    paste_offset: 34                      # 识别区粘贴左上角偏移(px)；(board-object)/2 居中
+    prob_use_real: 1.0                    # 使用真实底板的概率（0~1）
