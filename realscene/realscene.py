@@ -13,6 +13,7 @@ while _ROOT != os.path.dirname(_ROOT) and not os.path.exists(os.path.join(_ROOT,
     _ROOT = os.path.dirname(_ROOT)
 sys.path.insert(0, _ROOT)
 from config import load_config
+from edge_util import find_anchor, visible_rect, clamp_norm_bbox   # 同目录共享模块
 CFG = load_config()
 
 # 路径
@@ -32,6 +33,11 @@ MAX_TARGET_RATIO = _S.max_target_ratio
 MAX_TARGET_FAILURE = _S.max_target_failure
 MAX_OVERLAP_ATTEMPTS = _S.max_overlap_attempts
 TO_BORDER = float(_S.to_border)             # 边界安全距离
+# 边缘残缺 [prob, max_frac]：每目标 prob 概率允许部分越出画布（贴边被裁），
+# max_frac=越界量相对目标自身宽/高的最大比例；保底可见 ≥30% 自身，否则重采样
+EDGE_CLIP = _S.get("edge_clip", [0.0, 0.4])
+EDGE_CLIP_PROB = max(0.0, min(1.0, float(EDGE_CLIP[0])))
+EDGE_CLIP_FRAC = max(0.0, float(EDGE_CLIP[1]))
 NUM_ROUNDS = _S.num_rounds
 TARGET_REPEAT = max(1, int(_S.get("target_repeat", 1)))  # 每个目标每 epoch 复用次数（少图场景放大数据量）
 JPEG_QUALITY = int(_S.get("jpeg_quality", 95))
@@ -139,8 +145,13 @@ def aug_perspective(img, distortion=0.1):
     m = cv2.getPerspectiveTransform(src, dst)
     rgb = cv2.warpPerspective(img[:, :, :3], m, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
     if img.shape[2] > 3:
-        rest = cv2.warpPerspective(img[:, :, 3:], m, (w, h),
-                                   flags=cv2.INTER_NEAREST, borderValue=0)
+        rest = img[:, :, 3:]
+        if rest.shape[2] == 1:
+            rest = cv2.warpPerspective(rest[:, :, 0], m, (w, h),
+                                       flags=cv2.INTER_NEAREST, borderValue=0)[:, :, None]
+        else:
+            rest = cv2.warpPerspective(rest, m, (w, h),
+                                       flags=cv2.INTER_NEAREST, borderValue=0)
         return np.dstack([rgb, rest])
     return rgb
 
@@ -311,7 +322,13 @@ def _rotate_rgba(img, angle):
     m[0, 2] += (max_w - w) / 2.0
     m[1, 2] += (max_h - h) / 2.0
     rgb = cv2.warpAffine(img[:, :, :3], m, (max_w, max_h), flags=cv2.INTER_LINEAR, borderValue=0)
-    rest = cv2.warpAffine(img[:, :, 3:], m, (max_w, max_h), flags=cv2.INTER_NEAREST, borderValue=0)
+    # 注意：cv2.warpAffine 对 (H,W,1) 输入会返回 (H,W) 2 维，先转 3 维再还原
+    rest = img[:, :, 3:]
+    if rest.shape[2] == 1:
+        rest = cv2.warpAffine(rest[:, :, 0], m, (max_w, max_h),
+                              flags=cv2.INTER_NEAREST, borderValue=0)[:, :, None]
+    else:
+        rest = cv2.warpAffine(rest, m, (max_w, max_h), flags=cv2.INTER_NEAREST, borderValue=0)
     # 紧框：以打框 alpha（或贴图 alpha）内容为准（而非整图四角——那必然等于 expand 画布）
     label = rest[:, :, 1] if has_label else rest[:, :, 0]
     return np.dstack([rgb, rest]), _alpha_bbox(label)
@@ -468,40 +485,37 @@ def place_target(base, target_tuple, placed_bboxes):
     bh, bw = base_rgba.shape[:2]
     th, tw = target.shape[:2]
 
-    # 超出画布直接放弃
+    # 超出画布直接放弃（边缘残缺靠放宽放置范围实现，不放宽目标尺寸）
     if tw > bw or th > bh:
         return base, None
 
-    placed = False
-    for _ in range(MAX_OVERLAP_ATTEMPTS * 2):
-        x = random.randint(0, bw - tw)
-        y = random.randint(0, bh - th)
-
-        overlap = False
-        safe_margin = max(tw, th) * 0.1
-        for bbox in placed_bboxes:
-            dx = max(0, abs((x + tw / 2) - (bbox['x'] + bbox['width'] / 2)) - (tw + bbox['width']) / 2)
-            dy = max(0, abs((y + th / 2) - (bbox['y'] + bbox['height'] / 2)) - (th + bbox['height']) / 2)
-            if dx < safe_margin and dy < safe_margin:
-                overlap = True
-                break
-        if not overlap:
-            placed = True
-            break
-
-    if not placed:
+    res = find_anchor(bw, bh, tw, th, placed_bboxes, EDGE_CLIP_PROB, EDGE_CLIP_FRAC,
+                      MAX_OVERLAP_ATTEMPTS * 2)
+    if res is None:
         return base, None
+    x, y, _edge = res
+    vis = visible_rect(bw, bh, x, y, tw, th)
+    # find_anchor 已保证保底可见，但极巧合（紧框全出画布）再挡一层：
+    if _edge and tight:
+        tv = visible_rect(bw, bh, x + tight[0], y + tight[1],
+                          tight[2] - tight[0], tight[3] - tight[1], 0.0)
+        if tv is None:
+            return base, None
+    ix0, iy0, ix1, iy1 = vis
+    sx0, sy0 = ix0 - x, iy0 - y
+    ih, iw = iy1 - iy0, ix1 - ix0          # 可见交集尺寸
 
-    # 相邻区域 alpha 融合（含边缘羽化）
+    # 相邻区域 alpha 融合（含边缘羽化；交集切片，残缺目标保留画布内部分）
     alpha = target[:, :, 3].astype(np.float32)
     feather = TARGET_FEATHER.get(target_type, 0)
     if feather > 0:
         alpha = alpha * _build_edge_feather_alpha(tw, th, feather).astype(np.float32) / 255.0
+    alpha = alpha[sy0:sy0 + ih, sx0:sx0 + iw]
     alpha = np.clip(alpha, 0, 255).astype(np.float32) / 255.0
-    region = base_rgba[y:y + th, x:x + tw].astype(np.float32)
-    src = target[:, :, :3].astype(np.float32)
+    region = base_rgba[iy0:iy1, ix0:ix1].astype(np.float32)
+    src = target[sy0:sy0 + ih, sx0:sx0 + iw, :3].astype(np.float32)
     blended = alpha[..., None] * src + (1.0 - alpha[..., None]) * region
-    base_rgba[y:y + th, x:x + tw] = np.clip(blended, 0, 255).astype(np.uint8)
+    base_rgba[iy0:iy1, ix0:ix1] = np.clip(blended, 0, 255).astype(np.uint8)
 
     # 检测框：紧框目标用物体真实范围（相对粘贴画布），否则整张
     if tight:
@@ -601,17 +615,21 @@ def process_round(round_num, target_images, used_targets, bg_paths):
             width_norm = abs_w / BASE_SIZE[0]
             height_norm = abs_h / BASE_SIZE[1]
 
-            x_min = max(0.0 + TO_BORDER, x_center - width_norm / 2)
-            x_max = min(1.0 - TO_BORDER, x_center + width_norm / 2)
-            y_min = max(0.0 + TO_BORDER, y_center - height_norm / 2)
-            y_max = min(1.0 - TO_BORDER, y_center + height_norm / 2)
+            # clamp + 病态防御（全越界/碎屑框 → None）：跳过该目标（不动 used_targets，留池复用）
+            clipped = clamp_norm_bbox(x_center, y_center, width_norm, height_norm, TO_BORDER)
+            if clipped is None:
+                failed_attempts += 1
+                if failed_attempts >= MAX_TARGET_FAILURE:
+                    break
+                continue
+            x_center, y_center, width_norm, height_norm = clipped
 
             bboxes.append({
                 "class_id": class_id,
-                "x_center": (x_min + x_max) / 2,
-                "y_center": (y_min + y_max) / 2,
-                "width": x_max - x_min,
-                "height": y_max - y_min,
+                "x_center": x_center,
+                "y_center": y_center,
+                "width": width_norm,
+                "height": height_norm,
             })
             used_targets[pixel_bbox["original_idx"]] += 1
             failed_attempts = 0
