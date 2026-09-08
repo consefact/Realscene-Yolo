@@ -25,7 +25,7 @@ __pycache__/
 */check_samples/
 /yolo_run/
 */HDATASET/
-/1/
+/predict_video*/
 
 # 7-class task data
 /seven/
