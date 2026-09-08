@@ -1,11 +1,12 @@
-"""对同一个视频跑多个 YOLO 模型，各自保存打框视频并输出检测统计（串行执行）。
+"""
+对同一个视频跑多个 YOLO 模型（.pt 或 OpenVINO 目录），各自保存打框视频并输出检测统计（串行执行）。
 
 串行理由：逐个加载模型、各自推理，写起来最简单，也不抢 GPU 显存；
 每个模型结果独立成片，便于对比不同 epoch/版本权重的效果。
 
 用法：
-  python yolo/compare_videos.py xxx.mp4                      # 默认跑 yolo_run_/best-*.pt
-  python yolo/compare_videos.py xxx.mp4 --models a.pt b.pt --imgsz 640x480
+  python yolo/compare_videos.py xxx.mp4                      # 默认搜索 yolo_run_/best-*.pt 及 OpenVINO 目录
+  python yolo/compare_videos.py xxx.mp4 --models a.pt b_openvino/ --imgsz 640x480
   python yolo/compare_videos.py xxx.mp4 --conf 0.3 --out predict_video
 """
 import argparse
@@ -29,11 +30,19 @@ def parse_imgsz(s):
     return int(s)
 
 
+def is_openvino_model_dir(path):
+    """判断目录是否为 Ultralytics 导出的 OpenVINO 模型目录（包含 .xml 文件）。"""
+    if not os.path.isdir(path):
+        return False
+    # OpenVINO 模型目录通常包含一个 .xml 文件（模型结构）和 .bin（权重），以及 metadata.yaml
+    return any(fname.endswith(".xml") for fname in os.listdir(path))
+
+
 def main():
-    ap = argparse.ArgumentParser(description="一个视频跑多个 YOLO 模型，分别保存打框视频")
+    ap = argparse.ArgumentParser(description="一个视频跑多个 YOLO 模型（.pt 或 OpenVINO 目录），分别保存打框视频")
     ap.add_argument("source", help="视频文件路径")
     ap.add_argument("--models", nargs="+", default=None,
-                    help="模型权重或目录（目录取其下所有 .pt），可多个；默认取 yolo_run_/best-*.pt")
+                    help="模型权重或目录，可多个；支持 .pt 文件或 OpenVINO 导出目录。默认自动搜索 yolo_run_/ 下的 .pt 和 OpenVINO 目录")
     ap.add_argument("--conf", type=float, default=0.25, help="置信度阈值（默认 0.25）")
     ap.add_argument("--iou", type=float, default=0.45, help="NMS IoU 阈值（默认 0.45）")
     ap.add_argument("--imgsz", default="640x480", help="推理尺寸 WxH（默认 640x480）")
@@ -44,26 +53,47 @@ def main():
     if not os.path.isfile(args.source):
         print(f"❌ 找不到视频：{args.source}")
         sys.exit(1)
-    weights = args.models
-    if weights is None:
-        weights = sorted(glob.glob(os.path.join(_ROOT, "..", "yolo_run_", "best-*.pt")))
+
+    # 构建模型列表
+    weights = []
+    if args.models is None:
+        # 默认搜索：.pt 文件 + OpenVINO 目录
+        pt_files = sorted(glob.glob(os.path.join(_ROOT, "..", "yolo_run_", "best-*.pt")))
+        weights.extend(pt_files)
+        # 搜索 yolo_run_/ 下的所有子目录，若包含 .xml 则视为 OpenVINO 模型
+        run_dir = os.path.join(_ROOT, "..", "yolo_run_")
+        if os.path.isdir(run_dir):
+            for sub in sorted(os.listdir(run_dir)):
+                sub_path = os.path.join(run_dir, sub)
+                if os.path.isdir(sub_path) and is_openvino_model_dir(sub_path):
+                    weights.append(sub_path)
+        if not weights:
+            print("❌ 未找到模型：请在 yolo_run_/ 下放置 best-*.pt 或 OpenVINO 目录，或用 --models 指定")
+            sys.exit(1)
     else:
-        # 支持 文件 / 目录 / 混用：目录取其下所有 .pt
-        expanded = []
-        for w in weights:
+        # 用户指定：支持 .pt 文件、OpenVINO 目录、包含 .pt 的普通目录
+        for w in args.models:
             if os.path.isdir(w):
-                found = sorted(glob.glob(os.path.join(w, "*.pt")))
-                if not found:
-                    print(f"⚠ 目录下没有 .pt：{w}")
-                expanded.extend(found)
+                if is_openvino_model_dir(w):
+                    weights.append(w)
+                else:
+                    # 普通目录：查找其中的 .pt 文件（保留原逻辑）
+                    found = sorted(glob.glob(os.path.join(w, "*.pt")))
+                    if not found:
+                        print(f"⚠ 目录下没有 .pt 或 OpenVINO 模型：{w}")
+                    weights.extend(found)
             elif os.path.isfile(w):
-                expanded.append(w)
+                if w.endswith(".pt"):
+                    weights.append(w)
+                else:
+                    print(f"⚠ 不支持的文件类型（仅 .pt 或 OpenVINO 目录）：{w}")
             else:
                 print(f"⚠ 找不到模型，跳过：{w}")
-        weights = expanded
+
     if not weights:
-        print("❌ 没有模型：--models 指定，或在 yolo_run_/ 下放 best-*.pt")
+        print("❌ 没有可用的模型")
         sys.exit(1)
+
     os.makedirs(args.out, exist_ok=True)
 
     # 源视频 fps（仅本地文件有效），用于统一输出帧率
@@ -75,8 +105,13 @@ def main():
 
     summary = []  # (权重名, 总帧数, 均值fps, 每类{名称: (个数, 置信度和)})
     for w in weights:
-        name = os.path.splitext(os.path.basename(w))[0]
-        model = YOLO(w)
+        # 模型名称：.pt 取文件名，目录取目录名
+        if os.path.isdir(w):
+            name = os.path.basename(w.rstrip("/\\"))
+        else:
+            name = os.path.splitext(os.path.basename(w))[0]
+
+        model = YOLO(w)  # ultralytics 自动识别 .pt 或 OpenVINO 目录
         print(f"\n=== {w} | 类别({len(model.names)}): {list(model.names.values())}"
               f"  conf={args.conf} imgsz={args.imgsz}")
 
