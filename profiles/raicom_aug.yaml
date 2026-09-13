@@ -1,0 +1,90 @@
+# 由 tools/calibrate_augment_profile.py 自动生成（数据驱动增强标定）
+# 用法：config.yaml 的 synth.profile 设为 profiles/raicom_aug.yaml（相对项目根）即覆盖 aug 段
+aug:
+  base:
+    num:
+    - 2
+    - 5
+    extra_prob: 0.28
+    menu:
+    - type: brightness
+      prob: 0.5
+      range:
+      - 0.6
+      - 1.32
+    - type: contrast
+      prob: 0.5
+      range:
+      - 0.75
+      - 1.25
+    - type: color
+      prob: 0.5
+      range:
+      - 0.5
+      - 1.5
+    - type: hsv
+      prob: 0.5
+      delta: 0.3
+    - type: cutout
+      prob: 0.5
+      mask_size:
+      - 50
+      - 100
+      num_masks:
+      - 1
+      - 5
+      fill: color
+  final:
+    menu:
+    - type: gaussian
+      prob: 0.38
+      var:
+      - 780.3
+      - 5722.2
+    - type: salt_pepper
+      prob: 0.3
+      amount:
+      - 0.001
+      - 0.005
+    - type: poisson
+      prob: 0.3
+      intensity: 0.1
+strategy:
+  hard_case_ratio: 0.125
+  recommend_hard_case_sampling: false
+  notes:
+  - 基础增强用于覆盖常规光照/清晰度分布
+  - 困难样本（低照度/高噪声/强压缩）比例高时，建议保留 10-20% 真实现场图进验证
+calibration:
+  source: single(real)
+  align_strength: 1.0
+  raw_recommended:
+    brightness_range_pc:
+    - -51.7
+    - 32.5
+    contrast_range:
+    - 0.75
+    - 1.25
+    hsv_delta_suggested:
+    - 0.2
+    - 0.3
+    - 0.25
+    noise_factor_range:
+    - 0.012
+    - 0.088
+    final_gaussian_noise_prob: 0.38
+    final_sharpen_prob: 0.75
+    blur_kernel_suggested:
+    - 3
+    - 5
+    jpeg_artifact_quality_suggested:
+    - 55
+    - 95
+    shadow_shade_suggested:
+    - 0.75
+    - 0.98
+    gamma_suggested:
+    - 0.81
+    - 1.19
+    aug_num_max: 5
+    aug_extra_prob: 0.28

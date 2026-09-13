@@ -37,8 +37,5 @@ __pycache__/
 /predict_out/
 /yolo/dataset_ft.yaml
 
-# Calibration profiles (regenerated per task)
-/profiles/
-
 # labeling tool
 /X-AnyLabeling/

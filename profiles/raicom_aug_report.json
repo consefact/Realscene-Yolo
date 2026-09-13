@@ -1,0 +1,56 @@
+{
+  "profile_path": "D:\\projects\\airhust\\Realscene-Yolo\\profiles\\raicom_aug.yaml",
+  "mode": "single",
+  "align_strength": 1.0,
+  "calibration": {
+    "source": "single(real)",
+    "align_strength": 1.0,
+    "raw_recommended": {
+      "brightness_range_pc": [
+        -51.7,
+        32.5
+      ],
+      "contrast_range": [
+        0.75,
+        1.25
+      ],
+      "hsv_delta_suggested": [
+        0.2,
+        0.3,
+        0.25
+      ],
+      "noise_factor_range": [
+        0.012,
+        0.088
+      ],
+      "final_gaussian_noise_prob": 0.38,
+      "final_sharpen_prob": 0.75,
+      "blur_kernel_suggested": [
+        3,
+        5
+      ],
+      "jpeg_artifact_quality_suggested": [
+        55,
+        95
+      ],
+      "shadow_shade_suggested": [
+        0.75,
+        0.98
+      ],
+      "gamma_suggested": [
+        0.81,
+        1.19
+      ],
+      "aug_num_max": 5,
+      "aug_extra_prob": 0.28
+    }
+  },
+  "strategy": {
+    "hard_case_ratio": 0.125,
+    "recommend_hard_case_sampling": false,
+    "notes": [
+      "基础增强用于覆盖常规光照/清晰度分布",
+      "困难样本（低照度/高噪声/强压缩）比例高时，建议保留 10-20% 真实现场图进验证"
+    ]
+  }
+}
