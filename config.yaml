@@ -138,10 +138,11 @@ train:
   batch: 64
   workers: 4
   dropout: 0.5
-  patience: 100
+  patience: 30
   optimizer: SGD
   lr0: 0.001
   run_name: raicom            # 训练结果子目录名（yolo_runs/<run_name>）
+  save_period: 5
 
 # ---------------------------------------------------------------------------
 # 微调（finetune.py：从 best.pt 出发，混入实拍标注数据继续训，避免灾难性遗忘）
