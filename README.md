@@ -35,7 +35,8 @@
 - `generate_letters.py`：**「整图即目标」范例生成器**（为每个类别画类名文字图，demo 用）。
 - `target/smooth_target.py`：**「底板 + ROI」范例生成器**（把识别区贴到底板中心，demo 用）。
 - `tools/`：采集（`manual_shot.py`）、裁剪（`auto_crop.py`）、重命名（`rename.py`）、
-  数据集整理（`organize.py`）、标签转换（`json2yolo.py`）、增强标定（`calibrate_augment_profile.py`）、
+  数据集整理（`organize.py`）、标签转换（`json2yolo.py`）、**标签类别筛选**（`filter_labels.py`，
+  删类别+序号自动接续，用于"贴入但不打框"的干扰项实验）、增强标定（`calibrate_augment_profile.py`）、
   计数（`count.py`）。
 - `check/`：可视化检查（`label/` 看标注框，`yolo/quick_test.py` 批量推理验证）。
 - `yolo/`：训练（`y8train.py`）、混合微调（`finetune.py`）。
