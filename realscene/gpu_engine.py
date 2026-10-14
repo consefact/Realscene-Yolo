@@ -78,6 +78,10 @@ def extract_synth_cfg(cfg):
         if labdir:
             out["TARGET_ROI"][t] = None
     out["TARGET_SCALE"] = {t: tuple(s.get("scale", [0.5, 1.0])) for t, s in tt.items()}
+    # 最终大小带 [lo,hi]（目标最短边占画布最短边的比例）：可按类型覆盖全局
+    # min/max_target_ratio（scale 只是初始倍率，最终大小由这条带归一化决定）
+    out["TARGET_RATIO"] = {t: tuple(s.get("ratio", [_S.min_target_ratio, _S.max_target_ratio]))
+                           for t, s in tt.items()}
     out["TARGET_ROTATE"] = {t: tuple(s.get("rotate", [-45, 45])) for t, s in tt.items()}
     out["TARGET_PERSPECTIVE"] = {t: (tuple(s["perspective"]) if s.get("perspective") else None)
                                  for t, s in tt.items()}
@@ -774,10 +778,12 @@ class BatchSynthesizer:
         if abs(slot["angle"]) >= 0.01:
             max_w, max_h = _rotate_expand_dims(nw, nh, slot["angle"])
             hm = _rotation_matrix(nw, nh, slot["angle"], max_w, max_h) @ hm
-        # 比例缩放尺度（提前算：失败则不消耗）
+        # 比例缩放尺度（提前算：失败则不消耗）；ratio 按类型覆盖全局 min/max_target_ratio
+        r_lo, r_hi = self.sc["TARGET_RATIO"].get(
+            slot["ttype"], (self.sc["MIN_TARGET_RATIO"], self.sc["MAX_TARGET_RATIO"]))
         min_dim = min(max_w, max_h)
-        min_scale = (self.sc["MIN_TARGET_RATIO"] * min(W, H)) / min_dim
-        max_scale = min((self.sc["MAX_TARGET_RATIO"] * min(W, H)) / min_dim,
+        min_scale = (r_lo * min(W, H)) / min_dim
+        max_scale = min((r_hi * min(W, H)) / min_dim,
                         min(W / max_w, H / max_h))
         if max_scale <= 0 or min_scale > max_scale:
             return None

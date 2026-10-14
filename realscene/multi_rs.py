@@ -62,6 +62,10 @@ for _t, _ld in TARGET_LABEL_DIR.items():
     if _ld:
         TARGET_ROI[_t] = None
 TARGET_SCALE = {t: tuple(spec.get("scale", [0.5, 1.0])) for t, spec in TARGET_TYPES.items()}
+# 最终大小带 [lo,hi]（目标最短边占画布最短边的比例）：可按 target_type 覆盖全局
+# min/max_target_ratio。注意：scale 只是贴入前初始倍率，最终大小由这条带归一化决定。
+TARGET_RATIO = {t: tuple(spec.get("ratio", [MIN_TARGET_RATIO, MAX_TARGET_RATIO]))
+                for t, spec in TARGET_TYPES.items()}
 TARGET_ROTATE = {t: tuple(spec.get("rotate", [-45, 45])) for t, spec in TARGET_TYPES.items()}
 # 透视形变 [prob, distortion]：概率触发、四角扰动 ±distortion*min(w,h)；null=关闭
 TARGET_PERSPECTIVE = {t: (tuple(spec["perspective"]) if spec.get("perspective") else None)
@@ -595,11 +599,12 @@ def process_round(args):
         target, class_id, _, target_type, tight = augmented
         tw, th = target.shape[1], target.shape[0]
 
-        # 目标缩放到占画布 MIN/MAX 比例
+        # 目标缩放到占画布比例（最短边口径）；ratio 可按类型覆盖全局 min/max_target_ratio
+        r_lo, r_hi = TARGET_RATIO.get(target_type, (MIN_TARGET_RATIO, MAX_TARGET_RATIO))
         min_dim = min(tw, th)
         max_safe_scale = min(BASE_SIZE[0] / tw, BASE_SIZE[1] / th)
-        min_scale = (MIN_TARGET_RATIO * min(BASE_SIZE)) / min_dim
-        max_scale = min((MAX_TARGET_RATIO * min(BASE_SIZE)) / min_dim, max_safe_scale)
+        min_scale = (r_lo * min(BASE_SIZE)) / min_dim
+        max_scale = min((r_hi * min(BASE_SIZE)) / min_dim, max_safe_scale)
         if max_scale <= 0 or min_scale > max_scale:
             shared_manager.release_target(target_idx)
             used_in_round.remove(target_idx)
